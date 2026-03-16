@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "Team": {
+      "title": "Team",
+      "description": "A football team",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the team" },
+        "ownerId": { "type": "string", "description": "UID of the user who owns this team" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A player in a team",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the player" },
+        "photoUrl": { "type": "string", "description": "URL of the player's photo" },
+        "teamId": { "type": "string", "description": "ID of the team" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "teamId"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "A football match",
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string", "description": "ID of the team" },
+        "matchday": { "type": "integer", "description": "Matchday number" },
+        "opponent": { "type": "string", "description": "Name of the opponent" },
+        "result": { "type": "string", "description": "Match result (e.g., 3-1)" },
+        "date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teamId", "matchday", "opponent", "result"]
+    },
+    "PlayerStat": {
+      "title": "PlayerStat",
+      "description": "Statistics for a player in a specific match",
+      "type": "object",
+      "properties": {
+        "playerId": { "type": "string", "description": "ID of the player" },
+        "matchId": { "type": "string", "description": "ID of the match" },
+        "minutes": { "type": "integer", "description": "Minutes played" },
+        "goals": { "type": "integer", "description": "Goals scored" },
+        "yellowCards": { "type": "integer", "description": "Yellow cards received" },
+        "redCards": { "type": "integer", "description": "Red cards received" }
+      },
+      "required": ["playerId", "matchId"]
+    }
+  },
+  "firestore": {
+    "/teams": {
+      "schema": "Team",
+      "description": "Collection of teams"
+    },
+    "/teams/{teamId}/players": {
+      "schema": "Player",
+      "description": "Players belonging to a team"
+    },
+    "/teams/{teamId}/matches": {
+      "schema": "Match",
+      "description": "Matches played by a team"
+    },
+    "/teams/{teamId}/matches/{matchId}/stats": {
+      "schema": "PlayerStat",
+      "description": "Player statistics for a specific match"
+    }
+  }
+}

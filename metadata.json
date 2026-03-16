@@ -1,0 +1,5 @@
+{
+  "name": "Estadísticas Fútbol",
+  "description": "Aplicación para gestionar estadísticas de un equipo de fútbol alevín, incluyendo minutos, goles y tarjetas por partido.",
+  "requestFramePermissions": []
+}

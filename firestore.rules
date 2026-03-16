@@ -1,0 +1,98 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: teams
+    // Fields:
+    //   - name: string (required)
+    //   - createdAt: timestamp (optional)
+    //
+    // Collection: teams/{teamId}/players
+    // Fields:
+    //   - name: string (required)
+    //   - teamId: string (required)
+    //   - createdAt: timestamp (optional)
+    //
+    // Collection: teams/{teamId}/matches
+    // Fields:
+    //   - teamId: string (required)
+    //   - matchday: int (required)
+    //   - opponent: string (required)
+    //   - result: string (required)
+    //   - date: timestamp (optional)
+    //
+    // Collection: teams/{teamId}/matches/{matchId}/stats
+    // Fields:
+    //   - playerId: string (required)
+    //   - matchId: string (required)
+    //   - minutes: int (required)
+    //   - goals: int (required)
+    //   - yellowCards: int (required)
+    //   - redCards: int (required)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "alvaro.aloper@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    // Validation Functions
+    function isValidTeam(data) {
+      return data.keys().hasAll(['name']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100;
+    }
+
+    function isValidPlayer(data) {
+      return data.keys().hasAll(['name', 'teamId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.teamId is string;
+    }
+
+    function isValidMatch(data) {
+      return data.keys().hasAll(['teamId', 'matchday', 'opponent', 'result']) &&
+             data.teamId is string &&
+             data.matchday is int &&
+             data.opponent is string && data.opponent.size() > 0 &&
+             data.result is string;
+    }
+
+    function isValidStat(data) {
+      return data.keys().hasAll(['playerId', 'matchId', 'minutes', 'goals', 'yellowCards', 'redCards']) &&
+             data.playerId is string &&
+             data.matchId is string &&
+             data.minutes is int &&
+             data.goals is int &&
+             data.yellowCards is int &&
+             data.redCards is int;
+    }
+
+    // Rules
+    match /teams/{teamId} {
+      // Users can only read and write their own teams
+      allow read, update, delete: if isAuthenticated() && (resource == null || resource.data.ownerId == request.auth.uid);
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidTeam(request.resource.data);
+
+      match /players/{playerId} {
+        // Access to subcollections is governed by access to the parent team
+        allow read, write: if isAuthenticated() && get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid;
+      }
+
+      match /matches/{matchId} {
+        allow read, write: if isAuthenticated() && get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid;
+
+        match /stats/{statId} {
+          allow read, write: if isAuthenticated() && get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid;
+        }
+      }
+    }
+  }
+}
