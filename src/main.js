@@ -889,8 +889,8 @@ function renderOnboarding() {
         <div class="absolute bottom-0 left-0 -ml-16 -mb-16 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl"></div>
         
         <div class="relative z-10">
-          <div class="bg-indigo-600 w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-xl shadow-indigo-600/30 transform -rotate-6">
-            <span class="w-10 h-10 block text-white font-black text-2xl flex items-center justify-center">G</span>
+          <div class="w-24 h-24 mx-auto mb-8 transform -rotate-6">
+            <img src="/logo.png" alt="Golivium Logo" class="w-full h-full object-contain" referrerPolicy="no-referrer" />
           </div>
           
           <h1 class="text-5xl font-black tracking-tighter mb-2 text-indigo-600">GOLIVIUM</h1>
@@ -948,8 +948,8 @@ function renderLogin() {
   return `
     <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div class="bg-white p-8 rounded-[2rem] shadow-xl border border-slate-100 max-w-md w-full text-center">
-        <div class="bg-indigo-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-indigo-600/20">
-          <span class="w-8 h-8 block text-white font-black text-xl flex items-center justify-center">G</span>
+        <div class="w-20 h-20 mx-auto mb-6">
+          <img src="/logo.png" alt="Golivium Logo" class="w-full h-full object-contain" referrerPolicy="no-referrer" />
         </div>
         <h1 class="text-3xl font-black tracking-tighter mb-1 text-indigo-600">GOLIVIUM</h1>
         <h2 class="text-xl font-bold tracking-tight mb-2">Acceso a la App</h2>
@@ -982,9 +982,7 @@ function renderHeader() {
     <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
       <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         <div class="flex items-center gap-2 cursor-pointer shrink-0" onclick="setView('dashboard')">
-          <div class="bg-indigo-600 p-1.5 rounded-lg shadow-lg shadow-indigo-600/20">
-            <span class="w-5 h-5 block text-white font-black text-xs flex items-center justify-center">G</span>
-          </div>
+          <img src="/logo.png" alt="Golivium Logo" class="w-10 h-10 object-contain" referrerPolicy="no-referrer" />
           <h1 class="font-black text-lg tracking-tighter hidden md:block text-indigo-600">GOLIVIUM</h1>
         </div>
 
