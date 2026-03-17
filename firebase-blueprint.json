@@ -1,15 +1,52 @@
 {
   "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application",
+      "type": "object",
+      "properties": {
+        "google_id": { "type": "string", "description": "Google User ID" },
+        "name": { "type": "string", "description": "Display name" },
+        "email": { "type": "string", "description": "Email address" },
+        "avatar_url": { "type": "string", "description": "Profile picture URL" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["google_id", "name", "email"]
+    },
     "Team": {
       "title": "Team",
       "description": "A football team",
       "type": "object",
       "properties": {
         "name": { "type": "string", "description": "Name of the team" },
-        "ownerId": { "type": "string", "description": "UID of the user who owns this team" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "owner_id": { "type": "string", "description": "UID of the user who owns this team" },
+        "created_at": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "ownerId"]
+      "required": ["name", "owner_id"]
+    },
+    "TeamMember": {
+      "title": "TeamMember",
+      "description": "A member of a team (owner or coach)",
+      "type": "object",
+      "properties": {
+        "team_id": { "type": "string", "description": "ID of the team" },
+        "user_id": { "type": "string", "description": "ID of the user" },
+        "role": { "type": "string", "enum": ["owner", "coach"], "description": "Role of the user in the team" }
+      },
+      "required": ["team_id", "user_id", "role"]
+    },
+    "InviteCode": {
+      "title": "InviteCode",
+      "description": "A code to invite a coach to a team",
+      "type": "object",
+      "properties": {
+        "team_id": { "type": "string", "description": "ID of the team" },
+        "code": { "type": "string", "description": "The invitation code" },
+        "created_by": { "type": "string", "description": "UID of the user who created the code" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "used": { "type": "boolean", "description": "Whether the code has been used" }
+      },
+      "required": ["team_id", "code", "created_by", "used"]
     },
     "Player": {
       "title": "Player",
@@ -32,6 +69,7 @@
         "matchday": { "type": "integer", "description": "Matchday number" },
         "opponent": { "type": "string", "description": "Name of the opponent" },
         "result": { "type": "string", "description": "Match result (e.g., 3-1)" },
+        "ownGoals": { "type": "integer", "description": "Own goals scored by the team" },
         "date": { "type": "string", "format": "date-time" }
       },
       "required": ["teamId", "matchday", "opponent", "result"]
@@ -46,15 +84,28 @@
         "minutes": { "type": "integer", "description": "Minutes played" },
         "goals": { "type": "integer", "description": "Goals scored" },
         "yellowCards": { "type": "integer", "description": "Yellow cards received" },
+        "doubleYellowCards": { "type": "boolean", "description": "Whether the player received a second yellow card" },
         "redCards": { "type": "integer", "description": "Red cards received" }
       },
       "required": ["playerId", "matchId"]
     }
   },
   "firestore": {
+    "/users": {
+      "schema": "User",
+      "description": "Collection of users"
+    },
     "/teams": {
       "schema": "Team",
       "description": "Collection of teams"
+    },
+    "/team_members": {
+      "schema": "TeamMember",
+      "description": "Members of each team"
+    },
+    "/invite_codes": {
+      "schema": "InviteCode",
+      "description": "Invitation codes for teams"
     },
     "/teams/{teamId}/players": {
       "schema": "Player",

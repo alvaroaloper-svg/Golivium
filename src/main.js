@@ -12,6 +12,7 @@ import {
   addDoc, 
   updateDoc, 
   deleteDoc, 
+  setDoc,
   getDoc, 
   getDocs, 
   onSnapshot, 
@@ -46,6 +47,7 @@ function handleFirestoreError(error, operationType, path) {
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   state.error = `Error en la base de datos: ${errInfo.error}`;
+  state.loading = false;
   render();
 }
 
@@ -77,16 +79,21 @@ let matchFormState = {
   result: '0-0',
   goalsLocal: 0,
   goalsVisitor: 0,
-  playerStats: []
+  ownGoals: 0,
+  playerStats: [],
+  validationError: null
 };
 
 // --- State ---
 window.state = {
-  view: 'dashboard', // 'dashboard', 'new-match', 'player-detail'
+  view: 'dashboard', // 'dashboard', 'new-match', 'player-detail', 'profile', 'join-team', 'invite-coach'
   user: null,
+  userData: null,
   authReady: false,
+  onboardingComplete: localStorage.getItem('onboardingComplete') === 'true',
   teams: [],
   currentTeamId: null,
+  currentTeam: null,
   teamToDelete: null,
   players: [],
   matches: [],
@@ -106,15 +113,56 @@ window.state = {
   isAddingTeam: false,
   newTeamName: '',
   sortBy: 'name-asc',
+  inviteCode: null,
+  joinCode: '',
+  teamMembers: [],
 };
 
 // --- Auth Functions ---
 window.login = async () => {
+  state.loading = true;
+  render();
   try {
-    await signInWithPopup(auth, googleProvider);
+    const result = await signInWithPopup(auth, googleProvider);
+    const user = result.user;
+    
+    // Save user to Firestore
+    const userRef = doc(db, 'users', user.uid);
+    const userData = {
+      google_id: user.uid,
+      name: user.displayName,
+      email: user.email,
+      avatar_url: user.photoURL,
+      created_at: serverTimestamp(),
+    };
+    
+    // Check if user exists first to not overwrite created_at if not needed
+    const userSnap = await getDoc(userRef);
+    if (!userSnap.exists()) {
+      await updateDoc(userRef, userData).catch(async () => {
+        // If update fails, it doesn't exist, so set it
+        const { created_at, ...rest } = userData;
+        await setDoc(userRef, { ...rest, created_at: serverTimestamp() });
+      });
+    } else {
+      // Update existing user data (except created_at)
+      const { created_at, ...updateData } = userData;
+      await updateDoc(userRef, updateData);
+    }
+    
+    state.userData = (await getDoc(userRef)).data();
   } catch (error) {
     console.error("Login error:", error);
+    state.loading = false;
+    state.error = "Error al iniciar sesión. Por favor, inténtalo de nuevo.";
+    render();
   }
+};
+
+window.startOnboarding = () => {
+  state.onboardingComplete = true;
+  localStorage.setItem('onboardingComplete', 'true');
+  render();
 };
 
 window.logout = async () => {
@@ -131,10 +179,28 @@ window.logout = async () => {
   }
 };
 
-onAuthStateChanged(auth, (user) => {
+onAuthStateChanged(auth, async (user) => {
   state.user = user;
   state.authReady = true;
+  render();
   if (user) {
+    // Fetch user data
+    const userRef = doc(db, 'users', user.uid);
+    const userSnap = await getDoc(userRef);
+    if (userSnap.exists()) {
+      state.userData = userSnap.data();
+    } else {
+      // Create user if doesn't exist (e.g. first login)
+      const userData = {
+        google_id: user.uid,
+        name: user.displayName,
+        email: user.email,
+        avatar_url: user.photoURL,
+        created_at: serverTimestamp(),
+      };
+      await setDoc(userRef, userData);
+      state.userData = userData;
+    }
     fetchTeams();
   } else {
     state.loading = false;
@@ -151,25 +217,47 @@ async function fetchTeams() {
   if (!state.user) return;
   if (unsubTeams) unsubTeams();
   
-  // Filter teams by the logged-in user's ID
+  // Query team_members where user_id == uid
   const q = query(
-    collection(db, 'teams'), 
-    where('ownerId', '==', state.user.uid),
-    orderBy('name', 'asc')
+    collection(db, 'team_members'), 
+    where('user_id', '==', state.user.uid)
   );
   
-  unsubTeams = onSnapshot(q, (snapshot) => {
-    state.teams = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  unsubTeams = onSnapshot(q, async (snapshot) => {
+    const teamIds = snapshot.docs.map(doc => doc.data().team_id);
+    if (teamIds.length === 0) {
+      state.teams = [];
+      state.loading = false;
+      render();
+      return;
+    }
+    
+    // Fetch each team
+    const teamsData = [];
+    for (const teamId of teamIds) {
+      try {
+        const teamSnap = await getDoc(doc(db, 'teams', teamId));
+        if (teamSnap.exists()) {
+          teamsData.push({ id: teamSnap.id, ...teamSnap.data() });
+        }
+      } catch (e) {
+        console.error(`Error fetching team ${teamId}:`, e);
+      }
+    }
+    
+    state.teams = teamsData.sort((a, b) => a.name.localeCompare(b.name));
+    
     if (state.teams.length > 0) {
-      if (!state.currentTeamId) {
+      if (!state.currentTeamId || !state.teams.find(t => t.id === state.currentTeamId)) {
         state.currentTeamId = state.teams[0].id;
       }
+      state.currentTeam = state.teams.find(t => t.id === state.currentTeamId);
       fetchInitialData(state.currentTeamId);
     } else {
       state.loading = false;
       render();
     }
-  }, (error) => handleFirestoreError(error, OperationType.LIST, 'teams'));
+  }, (error) => handleFirestoreError(error, OperationType.LIST, 'team_members'));
 }
 
 window.refreshData = async () => {
@@ -192,10 +280,31 @@ async function fetchInitialData(teamId) {
   state.players = [];
   state.matches = [];
   state.teamStats = null;
+  state.teamMembers = [];
+  state.currentTeam = state.teams.find(t => t.id === teamId);
   render();
 
   if (unsubPlayers) unsubPlayers();
   if (unsubMatches) unsubMatches();
+
+  // Listen to Members
+  const membersQ = query(collection(db, 'team_members'), where('team_id', '==', teamId));
+  onSnapshot(membersQ, async (snapshot) => {
+    const membersData = [];
+    for (const memberDoc of snapshot.docs) {
+      const member = memberDoc.data();
+      try {
+        const userSnap = await getDoc(doc(db, 'users', member.user_id));
+        if (userSnap.exists()) {
+          membersData.push({ ...member, ...userSnap.data() });
+        }
+      } catch (e) {
+        console.error(`Error fetching user ${member.user_id}:`, e);
+      }
+    }
+    state.teamMembers = membersData;
+    render();
+  });
 
   // Listen to Players
   const playersQ = query(collection(db, `teams/${teamId}/players`), orderBy('name', 'asc'));
@@ -258,6 +367,7 @@ function calculateTeamStats() {
   let totalRed = 0;
   let totalDoubleYellow = 0;
   let totalGoals = 0;
+  let totalOwnGoals = 0;
 
   state.matches.forEach(m => {
     const [f, a] = m.result.split("-").map(n => parseInt(n.trim()));
@@ -265,6 +375,7 @@ function calculateTeamStats() {
       goalsFor += f;
       goalsAgainst += a;
     }
+    totalOwnGoals += (m.ownGoals || 0);
     if (m.playerStats) {
       m.playerStats.forEach(s => {
         if (s.doubleYellowCards) {
@@ -314,7 +425,8 @@ function calculateTeamStats() {
     totalYellowCards: totalYellow,
     totalRedCards: totalRed,
     totalDoubleYellowCards: totalDoubleYellow,
-    totalPlayerGoals: totalGoals
+    totalPlayerGoals: totalGoals,
+    totalOwnGoals: totalOwnGoals
   };
 }
 
@@ -387,18 +499,84 @@ window.handleNewTeamNameChange = (e) => {
 
 window.addTeam = async () => {
   if (!state.newTeamName.trim() || !state.user) return;
+  state.loading = true;
+  render();
   try {
     const docRef = await addDoc(collection(db, 'teams'), {
       name: state.newTeamName.trim(),
-      ownerId: state.user.uid,
-      createdAt: serverTimestamp()
+      owner_id: state.user.uid,
+      created_at: serverTimestamp()
     });
+    
+    // Create member entry for owner
+    const memberId = `${state.user.uid}_${docRef.id}`;
+    await setDoc(doc(db, 'team_members', memberId), {
+      team_id: docRef.id,
+      user_id: state.user.uid,
+      role: 'owner'
+    });
+    
     state.currentTeamId = docRef.id;
     state.newTeamName = '';
     state.isAddingTeam = false;
-    fetchInitialData(docRef.id);
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'teams');
+  }
+};
+
+window.generateInviteCode = async () => {
+  if (!state.currentTeamId) return;
+  const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+  const inviteRef = doc(db, 'invite_codes', code);
+  await setDoc(inviteRef, {
+    team_id: state.currentTeamId,
+    code: code,
+    created_by: state.user.uid,
+    used: false,
+    created_at: serverTimestamp(),
+  });
+  state.inviteCode = code;
+  render();
+};
+
+window.joinTeamWithCode = async () => {
+  if (!state.joinCode) return;
+  state.loading = true;
+  render();
+  try {
+    const inviteRef = doc(db, 'invite_codes', state.joinCode.trim().toUpperCase());
+    const inviteSnap = await getDoc(inviteRef);
+    
+    if (!inviteSnap.exists() || inviteSnap.data().used) {
+      state.error = "Código inválido o ya usado.";
+      state.loading = false;
+      render();
+      return;
+    }
+    
+    const inviteData = inviteSnap.data();
+    
+    // Add member
+    const memberId = `${state.user.uid}_${inviteData.team_id}`;
+    await setDoc(doc(db, 'team_members', memberId), {
+      team_id: inviteData.team_id,
+      user_id: state.user.uid,
+      role: 'coach',
+      invite_code: inviteSnap.id
+    });
+    
+    // Mark code as used
+    await updateDoc(inviteRef, { used: true });
+    
+    state.joinCode = '';
+    state.view = 'dashboard';
+    state.currentTeamId = inviteData.team_id;
+    fetchTeams();
+  } catch (error) {
+    console.error("Error joining team:", error);
+    state.error = "Error al unirse al equipo.";
+    state.loading = false;
+    render();
   }
 };
 
@@ -623,6 +801,11 @@ const renderPlayerAvatar = (player, sizeClass = 'w-12 h-12') => {
 window.render = () => {
   const app = document.getElementById('app');
   
+  // Save focus and selection
+  const activeId = document.activeElement?.id;
+  const selectionStart = document.activeElement?.selectionStart;
+  const selectionEnd = document.activeElement?.selectionEnd;
+
   if (!state.authReady) {
     app.innerHTML = `
       <div class="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -636,21 +819,11 @@ window.render = () => {
   }
 
   if (!state.user) {
-    app.innerHTML = `
-      <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div class="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 max-w-md w-full text-center">
-          <div class="bg-indigo-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-indigo-600/20">
-            <span class="w-8 h-8 block text-white">${Icons.Trophy}</span>
-          </div>
-          <h2 class="text-2xl font-black tracking-tight mb-2">Bienvenido</h2>
-          <p class="text-slate-500 mb-8">Inicia sesión con tu cuenta de Google para gestionar las estadísticas de tu equipo.</p>
-          <button onclick="login()" class="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center justify-center gap-3">
-            <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-            Entrar con Google
-          </button>
-        </div>
-      </div>
-    `;
+    if (!state.onboardingComplete) {
+      app.innerHTML = renderOnboarding();
+    } else {
+      app.innerHTML = renderLogin();
+    }
     return;
   }
 
@@ -691,17 +864,128 @@ window.render = () => {
       ${renderModals()}
     </div>
   `;
+
+  // Restore focus and selection
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) {
+      el.focus();
+      try {
+        if (typeof selectionStart === 'number' && (el.type === 'text' || el.type === 'search' || el.type === 'url' || el.type === 'tel' || el.type === 'password')) {
+          el.setSelectionRange(selectionStart, selectionEnd);
+        }
+      } catch (e) {
+        // Selection range not supported for this type
+      }
+    }
+  }
+}
+
+function renderOnboarding() {
+  return `
+    <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div class="bg-white p-8 sm:p-12 rounded-[2.5rem] shadow-2xl border border-slate-100 max-w-2xl w-full text-center relative overflow-hidden">
+        <div class="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl"></div>
+        <div class="absolute bottom-0 left-0 -ml-16 -mb-16 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl"></div>
+        
+        <div class="relative z-10">
+          <div class="bg-indigo-600 w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-xl shadow-indigo-600/30 transform -rotate-6">
+            <span class="w-10 h-10 block text-white font-black text-2xl flex items-center justify-center">G</span>
+          </div>
+          
+          <h1 class="text-5xl font-black tracking-tighter mb-2 text-indigo-600">GOLIVIUM</h1>
+          <h2 class="text-3xl font-bold tracking-tight mb-6 text-slate-900">Tu Equipo, Tus Reglas, Tus Estadísticas</h2>
+          
+          <div class="space-y-6 text-left mb-10">
+            <div class="flex gap-4">
+              <div class="bg-indigo-100 p-3 rounded-2xl shrink-0 h-fit text-indigo-600">
+                <span class="w-6 h-6 block">${Icons.Users}</span>
+              </div>
+              <div>
+                <h4 class="font-bold text-slate-800">Gestiona tu Plantilla</h4>
+                <p class="text-slate-500 text-sm">Añade jugadores, ponles cara con fotos y sigue su evolución partido a partido.</p>
+              </div>
+            </div>
+            
+            <div class="flex gap-4">
+              <div class="bg-emerald-100 p-3 rounded-2xl shrink-0 h-fit text-emerald-600">
+                <span class="w-6 h-6 block">${Icons.Calendar}</span>
+              </div>
+              <div>
+                <h4 class="font-bold text-slate-800">Registra cada Partido</h4>
+                <p class="text-slate-500 text-sm">Anota goles, minutos jugados y tarjetas. Todo el historial de tu equipo en un solo lugar.</p>
+              </div>
+            </div>
+            
+            <div class="flex gap-4">
+              <div class="bg-amber-100 p-3 rounded-2xl shrink-0 h-fit text-amber-600">
+                <span class="w-6 h-6 block">${Icons.TrendingUp}</span>
+              </div>
+              <div>
+                <h4 class="font-bold text-slate-800">Análisis Detallado</h4>
+                <p class="text-slate-500 text-sm">Visualiza quién es el pichichi, quién está apercibido y cómo va el balance de goles del equipo.</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="flex flex-col sm:flex-row gap-4">
+            <button onclick="startOnboarding()" class="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-600/25 hover:bg-indigo-700 hover:scale-[1.02] active:scale-95 transition-all uppercase tracking-wider">
+              Empezar
+            </button>
+            <button onclick="startOnboarding()" class="flex-1 py-4 bg-white text-slate-600 border-2 border-slate-100 rounded-2xl font-bold hover:bg-slate-50 hover:border-slate-200 active:scale-95 transition-all uppercase tracking-wider">
+              Ya tengo cuenta
+            </button>
+          </div>
+          
+          <p class="mt-8 text-slate-400 text-xs font-medium">Únete a cientos de entrenadores que ya profesionalizan su equipo.</p>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLogin() {
+  return `
+    <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div class="bg-white p-8 rounded-[2rem] shadow-xl border border-slate-100 max-w-md w-full text-center">
+        <div class="bg-indigo-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-indigo-600/20">
+          <span class="w-8 h-8 block text-white font-black text-xl flex items-center justify-center">G</span>
+        </div>
+        <h1 class="text-3xl font-black tracking-tighter mb-1 text-indigo-600">GOLIVIUM</h1>
+        <h2 class="text-xl font-bold tracking-tight mb-2">Acceso a la App</h2>
+        <p class="text-slate-500 mb-8">Inicia sesión con tu cuenta de Google para acceder a tus equipos.</p>
+        
+        ${state.loading ? `
+          <div class="py-4 flex flex-col items-center gap-3">
+            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+            <p class="text-xs font-bold text-indigo-600 uppercase tracking-widest">Conectando...</p>
+          </div>
+        ` : `
+          <button onclick="login()" class="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center justify-center gap-3 group">
+            <svg class="w-5 h-5 group-hover:scale-110 transition-transform" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Entrar con Google
+          </button>
+        `}
+        
+        <button onclick="state.onboardingComplete = false; render()" class="mt-6 text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors uppercase tracking-widest">
+          Ver explicación de nuevo
+        </button>
+      </div>
+    </div>
+  `;
 }
 
 function renderHeader() {
+  const isOwner = state.currentTeam && state.currentTeam.owner_id === state.user.uid;
+
   return `
     <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
       <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         <div class="flex items-center gap-2 cursor-pointer shrink-0" onclick="setView('dashboard')">
           <div class="bg-indigo-600 p-1.5 rounded-lg shadow-lg shadow-indigo-600/20">
-            <span class="w-5 h-5 block text-white">${Icons.Trophy}</span>
+            <span class="w-5 h-5 block text-white font-black text-xs flex items-center justify-center">G</span>
           </div>
-          <h1 class="font-black text-lg tracking-tighter hidden md:block">ESTADÍSTICAS</h1>
+          <h1 class="font-black text-lg tracking-tighter hidden md:block text-indigo-600">GOLIVIUM</h1>
         </div>
 
         <div class="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto no-scrollbar py-1 px-2">
@@ -710,6 +994,7 @@ function renderHeader() {
               ${state.editingTeamId === team.id ? `
                 <div class="flex items-center bg-white border border-indigo-300 rounded-lg px-2 py-1 shadow-sm">
                   <input 
+                    id="edit-team-name-input"
                     autofocus
                     class="text-xs font-bold outline-none w-24"
                     value="${state.editTeamName}"
@@ -733,7 +1018,7 @@ function renderHeader() {
                     }"
                   >
                     ${team.name}
-                    ${state.currentTeamId === team.id ? `
+                    ${state.currentTeamId === team.id && team.owner_id === state.user.uid ? `
                       <div class="flex items-center gap-1 ml-1">
                         <span class="w-3 h-3 block opacity-60 hover:opacity-100 transition-opacity cursor-pointer" onclick="event.stopPropagation(); setEditingTeam('${team.id}', '${team.name}')">
                           ${Icons.Edit2}
@@ -751,6 +1036,7 @@ function renderHeader() {
           ${state.isAddingTeam ? `
             <div class="flex items-center bg-white border border-indigo-300 rounded-lg px-2 py-1 shadow-sm shrink-0">
               <input 
+                id="header-new-team-input"
                 autofocus
                 placeholder="Nuevo equipo"
                 class="text-xs font-bold outline-none w-24 sm:w-32"
@@ -773,21 +1059,35 @@ function renderHeader() {
               class="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all whitespace-nowrap group shrink-0"
             >
               <span class="w-4 h-4 block text-slate-400 group-hover:text-indigo-600 transition-colors">${Icons.Plus}</span>
-              <span class="text-xs font-bold">Añadir</span>
+              <span class="text-xs font-bold">Crear equipo</span>
             </button>
           `}
+
+          <button 
+            onclick="setView('join-team')"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all whitespace-nowrap group shrink-0"
+          >
+            <span class="w-4 h-4 block text-slate-400 group-hover:text-indigo-600 transition-colors">${Icons.Users}</span>
+            <span class="text-xs font-bold">Unirse</span>
+          </button>
         </div>
         
         <div class="flex items-center gap-2">
-          ${state.view === 'dashboard' ? `
+          ${state.view === 'dashboard' && state.currentTeamId ? `
             <button onclick="setView('new-match')" class="shrink-0 text-xs sm:text-sm py-2 bg-indigo-600 text-white px-4 rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center gap-2">
               <span class="w-4 h-4 block">${Icons.Plus}</span>
               <span class="hidden sm:inline">Añadir partido</span>
               <span class="sm:hidden">Partido</span>
             </button>
+            ${isOwner ? `
+              <button onclick="setView('invite-coach')" class="shrink-0 p-2 text-slate-500 hover:bg-slate-100 rounded-xl transition-all" title="Invitar entrenador">
+                <span class="w-5 h-5 block">${Icons.Plus}</span>
+              </button>
+            ` : ''}
           ` : ''}
-          <button onclick="logout()" class="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all" title="Cerrar sesión">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+          
+          <button onclick="setView('profile')" class="w-10 h-10 rounded-xl overflow-hidden border-2 border-transparent hover:border-indigo-600 transition-all shrink-0">
+            <img src="${state.user.photoURL}" alt="${state.user.displayName}" class="w-full h-full object-cover" referrerPolicy="no-referrer" />
           </button>
         </div>
       </div>
@@ -796,10 +1096,132 @@ function renderHeader() {
 }
 
 function renderContent() {
-  if (state.view === 'dashboard') return renderDashboard();
-  if (state.view === 'new-match') return renderMatchForm();
-  if (state.view === 'player-detail') return renderPlayerDetail();
-  return '';
+  switch (state.view) {
+    case 'dashboard':
+      return renderDashboard();
+    case 'new-match':
+      return renderMatchForm();
+    case 'player-detail':
+      return renderPlayerDetail();
+    case 'profile':
+      return renderProfile();
+    case 'join-team':
+      return renderJoinTeam();
+    case 'invite-coach':
+      return renderInviteCoach();
+    default:
+      return renderDashboard();
+  }
+}
+
+function renderProfile() {
+  return `
+    <div class="max-w-2xl mx-auto">
+      <div class="bg-white rounded-[2.5rem] shadow-xl border border-slate-100 overflow-hidden">
+        <div class="bg-indigo-600 h-32 relative">
+          <button onclick="setView('dashboard')" class="absolute top-6 left-6 p-2 bg-white/20 hover:bg-white/30 rounded-xl text-white transition-all">
+            <span class="w-5 h-5 block">${Icons.ArrowLeft}</span>
+          </button>
+        </div>
+        <div class="px-8 pb-8">
+          <div class="relative -mt-16 mb-6">
+            <img src="${state.user.photoURL}" alt="${state.user.displayName}" class="w-32 h-32 rounded-[2rem] border-4 border-white shadow-xl object-cover" referrerPolicy="no-referrer" />
+          </div>
+          <h2 class="text-3xl font-black tracking-tight text-slate-900">${state.user.displayName}</h2>
+          <p class="text-slate-500 font-medium mb-8">${state.user.email}</p>
+          
+          <div class="space-y-4">
+            <button onclick="logout()" class="w-full py-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center justify-center gap-2">
+              <span class="w-5 h-5 block">${Icons.Trash2}</span>
+              Cerrar sesión
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderJoinTeam() {
+  return `
+    <div class="max-w-md mx-auto">
+      <div class="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100">
+        <div class="flex items-center gap-4 mb-8">
+          <button onclick="setView('dashboard')" class="p-2 hover:bg-slate-100 rounded-xl transition-all">
+            <span class="w-5 h-5 block text-slate-500">${Icons.ArrowLeft}</span>
+          </button>
+          <h2 class="text-2xl font-black tracking-tight">Unirse a un equipo</h2>
+        </div>
+        
+        <p class="text-slate-500 mb-6">Introduce el código de invitación que te ha proporcionado el propietario del equipo.</p>
+        
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Código de invitación</label>
+            <input 
+              id="join-team-code-input"
+              type="text" 
+              placeholder="Ej: ABX92KLM" 
+              class="w-full px-6 py-4 bg-slate-50 border-2 border-transparent focus:border-indigo-600 rounded-2xl outline-none font-bold transition-all uppercase"
+              value="${state.joinCode}"
+              oninput="state.joinCode = event.target.value; render()"
+            />
+          </div>
+          
+          <button onclick="joinTeamWithCode()" class="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all uppercase tracking-wider">
+            Unirse al equipo
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderInviteCoach() {
+  const team = state.teams.find(t => t.id === state.currentTeamId);
+  return `
+    <div class="max-w-md mx-auto">
+      <div class="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100">
+        <div class="flex items-center gap-4 mb-8">
+          <button onclick="setView('dashboard')" class="p-2 hover:bg-slate-100 rounded-xl transition-all">
+            <span class="w-5 h-5 block text-slate-500">${Icons.ArrowLeft}</span>
+          </button>
+          <h2 class="text-2xl font-black tracking-tight">Invitar entrenador</h2>
+        </div>
+        
+        <p class="text-slate-500 mb-6">Genera un código para que otro entrenador pueda colaborar en la gestión de <strong>${team?.name}</strong>.</p>
+        
+        ${state.inviteCode ? `
+          <div class="bg-indigo-50 border-2 border-indigo-100 p-6 rounded-2xl text-center mb-6">
+            <p class="text-xs font-black text-indigo-400 uppercase tracking-widest mb-2">Código generado</p>
+            <p class="text-4xl font-black text-indigo-600 tracking-widest">${state.inviteCode}</p>
+          </div>
+          <p class="text-xs text-slate-400 text-center mb-6">Comparte este código con la persona que quieras invitar.</p>
+        ` : ''}
+        
+        <button onclick="generateInviteCode()" class="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all uppercase tracking-wider">
+          ${state.inviteCode ? 'Generar otro código' : 'Generar código de invitación'}
+        </button>
+
+        <div class="mt-10">
+          <h3 class="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 ml-1">Miembros del equipo</h3>
+          <div class="space-y-3">
+            ${state.teamMembers.map(member => `
+              <div class="flex items-center justify-between p-3 bg-slate-50 rounded-2xl">
+                <div class="flex items-center gap-3">
+                  <img src="${member.avatar_url}" class="w-8 h-8 rounded-lg object-cover" />
+                  <div>
+                    <p class="text-sm font-bold text-slate-800">${member.name}</p>
+                    <p class="text-[10px] font-bold text-slate-400 uppercase">${member.role === 'owner' ? 'Propietario' : 'Entrenador'}</p>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderDashboard() {
@@ -873,7 +1295,7 @@ function renderDashboard() {
                   Temporada 2025/2026
                 </div>
                 <div class="flex items-center gap-4 mb-2">
-                  <h2 class="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tighter truncate">
+                  <h2 class="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tighter">
                     ${currentTeam?.name || 'Equipo'}
                   </h2>
                   <button 
@@ -929,7 +1351,7 @@ function renderDashboard() {
                   ${renderPlayerAvatar(topScorer, 'w-12 h-12')}
                   <div class="min-w-0">
                     <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider mb-0.5">Pichichi</p>
-                    <p class="font-bold text-base leading-tight truncate">${topScorer.name}</p>
+                    <p class="font-bold text-base leading-tight">${topScorer.name}</p>
                     <p class="text-indigo-400 font-black text-sm mt-0.5">${topScorer.totalGoals} GOLES</p>
                   </div>
                 </div>
@@ -940,17 +1362,17 @@ function renderDashboard() {
                   <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider mb-3">Último Resultado</p>
                   <div class="flex items-center justify-between gap-3">
                     <div class="text-center flex-1 min-w-0">
-                      <p class="text-[9px] text-slate-400 font-bold uppercase truncate mb-1">${currentTeam?.name || 'Equipo'}</p>
+                      <p class="text-[9px] text-slate-400 font-bold uppercase mb-1">${currentTeam?.name || 'Equipo'}</p>
                       <p class="text-2xl font-black">${lastMatch.result.split('-')[0]}</p>
                     </div>
                     <div class="h-8 w-px bg-white/10 shrink-0"></div>
                     <div class="text-center flex-1 min-w-0">
-                      <p class="text-[9px] text-slate-400 font-bold uppercase truncate mb-1">Rival</p>
+                      <p class="text-[9px] text-slate-400 font-bold uppercase mb-1">Rival</p>
                       <p class="text-2xl font-black">${lastMatch.result.split('-')[1]}</p>
                     </div>
                   </div>
                   <div class="mt-3 pt-2 border-t border-white/5 text-center">
-                    <p class="text-[10px] text-indigo-400 font-bold uppercase tracking-widest truncate">vs ${lastMatch.opponent}</p>
+                    <p class="text-[10px] text-indigo-400 font-bold uppercase tracking-widest">vs ${lastMatch.opponent}</p>
                   </div>
                 </div>
               ` : ''}
@@ -1004,6 +1426,13 @@ function renderDashboard() {
                 <div class="w-3 h-4 bg-red-500 rounded-sm shadow-sm" title="Rojas"></div>
                 <span class="text-2xl font-black text-slate-900">${state.teamStats?.totalRedCards || 0}</span>
               </div>
+              <div class="flex items-center gap-2">
+                <div class="relative w-5 h-5" title="Dobles Amarillas">
+                  <div class="absolute top-0 left-0 w-3 h-4 bg-amber-400 rounded-sm shadow-sm"></div>
+                  <div class="absolute top-1.5 left-1.5 w-3 h-4 bg-amber-400 rounded-sm shadow-sm border-l border-t border-white/40"></div>
+                </div>
+                <span class="text-2xl font-black text-slate-900">${state.teamStats?.totalDoubleYellowCards || 0}</span>
+              </div>
             </div>
           </div>
           <div class="bg-amber-50 p-3 rounded-2xl group-hover:bg-amber-500 group-hover:text-white transition-all text-amber-600">
@@ -1056,6 +1485,7 @@ function renderDashboard() {
                   ${state.editingPlayerId === player.id ? `
                     <div class="flex items-center gap-2 flex-1" onclick="event.stopPropagation()">
                       <input 
+                        id="edit-player-name-${player.id}"
                         autofocus
                         type="text"
                         value="${state.editName}"
@@ -1074,7 +1504,7 @@ function renderDashboard() {
                     <div class="flex items-center gap-4 flex-1 min-w-0">
                       ${renderPlayerAvatar(player, 'w-12 h-12')}
                       <div class="flex flex-col min-w-0">
-                        <span class="font-bold text-slate-800 truncate text-base">${player.name}</span>
+                        <span class="font-bold text-slate-800 text-base">${player.name}</span>
                         <div class="flex items-center gap-3 mt-0.5">
                           <span class="text-[10px] font-black text-indigo-500 uppercase tracking-widest bg-indigo-50 px-1.5 py-0.5 rounded">
                             ${player.totalGoals || 0} ${player.totalGoals === 1 ? 'GOL' : 'GOLES'}
@@ -1140,7 +1570,7 @@ function renderDashboard() {
                       </div>
                       <div class="flex items-center gap-2">
                         <div class="w-1.5 h-1.5 rounded-full bg-slate-300"></div>
-                        <h4 class="font-bold text-slate-800 text-sm truncate">vs ${match.opponent}</h4>
+                        <h4 class="font-bold text-slate-800 text-sm">vs ${match.opponent} ${match.ownGoals ? `<span class="text-[10px] text-slate-400 ml-1 font-black uppercase tracking-tighter">(+${match.ownGoals} Propia)</span>` : ''}</h4>
                       </div>
                     </div>
                   `}).join('')}
@@ -1162,7 +1592,10 @@ function renderDashboard() {
                 </div>
                 <div class="flex justify-between items-center">
                   <span class="text-slate-500 text-xs font-bold uppercase tracking-wider">Goles Totales</span>
-                  <span class="text-lg font-black text-emerald-600">${state.teamStats?.goalsFor || 0}</span>
+                  <div class="text-right">
+                    <span class="text-lg font-black text-emerald-600">${state.teamStats?.goalsFor || 0}</span>
+                    ${state.teamStats?.totalOwnGoals > 0 ? `<p class="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">(${state.teamStats.totalOwnGoals} Propia)</p>` : ''}
+                  </div>
                 </div>
                 <div class="flex justify-between items-center">
                   <span class="text-slate-500 text-xs font-bold uppercase tracking-wider">Goles Contra</span>
@@ -1195,12 +1628,11 @@ function renderWarnings() {
           <h2 class="text-sm font-black uppercase tracking-widest text-amber-900">Jugadores Apercibidos</h2>
         </div>
         <div class="p-6">
-          <p class="text-amber-700 text-xs font-medium mb-5">Los siguientes jugadores están a una tarjeta amarilla de la suspensión:</p>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             ${apercibidos.map(player => `
-              <div class="bg-white p-3 rounded-xl border border-amber-200 flex items-center justify-between shadow-sm">
-                <span class="font-bold text-slate-800 text-sm truncate">${player.name}</span>
-                <span class="text-xs font-black text-amber-600 bg-amber-50 px-2 py-1 rounded-lg border border-amber-100">${player.totalYellowCards}A</span>
+              <div class="bg-white p-3 rounded-xl border border-amber-200 flex items-center justify-between gap-3 shadow-sm">
+                <span class="font-bold text-slate-800 text-sm">${player.name}</span>
+                <span class="text-xs font-black text-amber-600 bg-amber-50 px-2 py-1 rounded-lg border border-amber-100 shrink-0">${player.totalYellowCards}A</span>
               </div>
             `).join('')}
           </div>
@@ -1311,6 +1743,8 @@ window.initMatchForm = (matchId) => {
       result: match.result,
       goalsLocal: local,
       goalsVisitor: visitor,
+      ownGoals: match.ownGoals || 0,
+      validationError: null,
       playerStats: state.players.map(p => {
         const stat = match.playerStats?.find(s => s.playerId === p.id);
         return {
@@ -1332,6 +1766,8 @@ window.initMatchForm = (matchId) => {
       result: '0-0',
       goalsLocal: 0,
       goalsVisitor: 0,
+      ownGoals: 0,
+      validationError: null,
       playerStats: state.players.map(p => ({
         playerId: p.id,
         name: p.name,
@@ -1379,14 +1815,29 @@ window.handlePlayerStatChange = (playerId, field, val) => {
 window.saveMatch = async (e) => {
   e.preventDefault();
   
+  // Validation: Total goals must match individual goals + own goals
+  const totalIndividualGoals = matchFormState.playerStats.reduce((sum, s) => sum + (s.goals || 0), 0);
+  const totalTeamGoals = totalIndividualGoals + (parseInt(matchFormState.ownGoals) || 0);
+  
+  if (totalTeamGoals !== parseInt(matchFormState.goalsLocal)) {
+    matchFormState.validationError = `El recuento de goles (${totalTeamGoals}) no coincide con el marcador local (${matchFormState.goalsLocal}). Jugadores: ${totalIndividualGoals}, Propia puerta: ${matchFormState.ownGoals || 0}.`;
+    render();
+    return;
+  }
+
+  matchFormState.validationError = null;
+  
   try {
     let matchId = state.editingMatchId;
+    const matchData = {
+      matchday: parseInt(matchFormState.matchday),
+      opponent: matchFormState.opponent,
+      result: matchFormState.result,
+      ownGoals: parseInt(matchFormState.ownGoals) || 0
+    };
+
     if (matchId) {
-      await updateDoc(doc(db, `teams/${state.currentTeamId}/matches`, matchId), {
-        matchday: parseInt(matchFormState.matchday),
-        opponent: matchFormState.opponent,
-        result: matchFormState.result
-      });
+      await updateDoc(doc(db, `teams/${state.currentTeamId}/matches`, matchId), matchData);
       
       // Update stats (delete and re-add for simplicity in this structure)
       const statsCol = collection(db, `teams/${state.currentTeamId}/matches/${matchId}/stats`);
@@ -1396,13 +1847,13 @@ window.saveMatch = async (e) => {
       }
       
       for (const stat of matchFormState.playerStats) {
-        await addDoc(statsCol, stat);
+        // Remove UI-only fields before saving
+        const { name, photoUrl, ...saveStat } = stat;
+        await addDoc(statsCol, { ...saveStat, matchId });
       }
     } else {
       const matchRef = await addDoc(collection(db, `teams/${state.currentTeamId}/matches`), {
-        matchday: parseInt(matchFormState.matchday),
-        opponent: matchFormState.opponent,
-        result: matchFormState.result,
+        ...matchData,
         teamId: state.currentTeamId,
         date: serverTimestamp()
       });
@@ -1410,7 +1861,8 @@ window.saveMatch = async (e) => {
       
       const statsCol = collection(db, `teams/${state.currentTeamId}/matches/${matchId}/stats`);
       for (const stat of matchFormState.playerStats) {
-        await addDoc(statsCol, { ...stat, matchId });
+        const { name, photoUrl, ...saveStat } = stat;
+        await addDoc(statsCol, { ...saveStat, matchId });
       }
     }
     
@@ -1454,10 +1906,17 @@ function renderMatchForm() {
       </div>
 
       <form onsubmit="saveMatch(event)" class="space-y-8">
+        ${matchFormState.validationError ? `
+          <div class="bg-red-50 border border-red-200 text-red-600 p-4 rounded-2xl flex items-center gap-3 animate-pulse">
+            <span class="w-5 h-5 shrink-0">${Icons.AlertCircle}</span>
+            <p class="text-sm font-bold">${matchFormState.validationError}</p>
+          </div>
+        ` : ''}
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div class="space-y-2">
             <label class="text-xs font-bold text-slate-500 uppercase tracking-wider">Jornada</label>
             <input 
+              id="match-form-matchday"
               type="number" 
               required
               value="${matchFormState.matchday}"
@@ -1468,6 +1927,7 @@ function renderMatchForm() {
           <div class="space-y-2">
             <label class="text-xs font-bold text-slate-500 uppercase tracking-wider">Rival</label>
             <input 
+              id="match-form-opponent"
               type="text" 
               required
               placeholder="Nombre del equipo rival"
@@ -1481,6 +1941,7 @@ function renderMatchForm() {
             <div class="flex items-center gap-3">
               <div class="flex-1">
                 <input 
+                  id="match-form-goals-local"
                   type="number" 
                   min="0"
                   placeholder="Local"
@@ -1488,13 +1949,14 @@ function renderMatchForm() {
                   onchange="handleMatchFormChange('goalsLocal', this.value)"
                   class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-xl bg-slate-50"
                 />
-                <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 truncate px-1">
+                <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 px-1">
                   ${state.teams.find(t => t.id === state.currentTeamId)?.name || 'Local'}
                 </span>
               </div>
               <span class="text-2xl font-black text-slate-300">-</span>
               <div class="flex-1">
                 <input 
+                  id="match-form-goals-visitor"
                   type="number" 
                   min="0"
                   placeholder="Rival"
@@ -1502,7 +1964,7 @@ function renderMatchForm() {
                   onchange="handleMatchFormChange('goalsVisitor', this.value)"
                   class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-xl bg-slate-50"
                 />
-                <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 truncate px-1">
+                <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 px-1">
                   ${matchFormState.opponent || 'Rival'}
                 </span>
               </div>
@@ -1537,6 +1999,7 @@ function renderMatchForm() {
                     </td>
                     <td class="px-6 py-4">
                       <input 
+                        id="stat-minutes-${stat.playerId}"
                         type="number" 
                         min="0"
                         max="90"
@@ -1547,6 +2010,7 @@ function renderMatchForm() {
                     </td>
                     <td class="px-6 py-4">
                       <input 
+                        id="stat-goals-${stat.playerId}"
                         type="number" 
                         min="0"
                         value="${stat.goals}"
@@ -1556,6 +2020,7 @@ function renderMatchForm() {
                     </td>
                     <td class="px-6 py-4">
                       <input 
+                        id="stat-yellow-${stat.playerId}"
                         type="number" 
                         min="0"
                         max="1"
@@ -1567,15 +2032,23 @@ function renderMatchForm() {
                     </td>
                     <td class="px-6 py-4">
                       <button 
+                        id="stat-double-yellow-${stat.playerId}"
                         type="button"
                         onclick="handlePlayerStatChange('${stat.playerId}', 'doubleYellowCards', ${!stat.doubleYellowCards})"
-                        class="w-full py-2 rounded-lg border ${stat.doubleYellowCards ? 'bg-orange-500 border-orange-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-400'} transition-all flex items-center justify-center gap-1"
+                        class="w-full py-2 rounded-lg border ${stat.doubleYellowCards ? 'bg-amber-500 border-amber-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-400'} transition-all flex items-center justify-center gap-1"
                       >
+                        ${stat.doubleYellowCards ? `
+                          <div class="relative w-4 h-4 mr-1">
+                            <div class="absolute top-0 left-0 w-2.5 h-3.5 bg-white rounded-sm"></div>
+                            <div class="absolute top-1 left-1 w-2.5 h-3.5 bg-white rounded-sm border-l border-t border-amber-500"></div>
+                          </div>
+                        ` : ''}
                         <span class="text-[10px] font-bold uppercase">${stat.doubleYellowCards ? 'SÍ' : 'NO'}</span>
                       </button>
                     </td>
                     <td class="px-6 py-4">
                       <input 
+                        id="stat-red-${stat.playerId}"
                         type="number" 
                         min="0"
                         max="1"
@@ -1588,6 +2061,25 @@ function renderMatchForm() {
                 `).join('')}
               </tbody>
             </table>
+          </div>
+          <div class="p-6 bg-slate-50/30 border-t border-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600">
+                <span class="w-5 h-5 block">${Icons.Activity}</span>
+              </div>
+              <div>
+                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Goles Propia Puerta</p>
+                <p class="text-xs text-slate-500">Goles del rival a nuestro favor</p>
+              </div>
+            </div>
+            <input 
+              id="match-form-own-goals"
+              type="number" 
+              min="0"
+              value="${matchFormState.ownGoals}"
+              oninput="handleMatchFormChange('ownGoals', this.value)"
+              class="w-24 p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-lg shadow-sm bg-white"
+            />
           </div>
         </div>
 

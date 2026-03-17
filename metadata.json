@@ -1,5 +1,5 @@
 {
-  "name": "Estadísticas Fútbol",
-  "description": "Aplicación para gestionar estadísticas de un equipo de fútbol alevín, incluyendo minutos, goles y tarjetas por partido.",
+  "name": "GOLIVIUM",
+  "description": "Plataforma colaborativa para la gestión de estadísticas de equipos de fútbol. Registra minutos, goles, tarjetas y colabora con otros entrenadores.",
   "requestFramePermissions": []
 }

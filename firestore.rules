@@ -45,10 +45,46 @@ service cloud.firestore {
         (request.auth.token.email == "alvaro.aloper@gmail.com" && request.auth.token.email_verified == true);
     }
 
+    function isMember(teamId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId));
+    }
+
+    function getRole(teamId) {
+      return get(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId)).data.role;
+    }
+
+    function isOwner(teamId) {
+      return isAuthenticated() && getRole(teamId) == 'owner';
+    }
+
     // Validation Functions
+    function isValidUser(data) {
+      return data.keys().hasAll(['google_id', 'name', 'email']) &&
+             data.google_id is string &&
+             data.name is string && data.name.size() > 0 &&
+             data.email is string;
+    }
+
     function isValidTeam(data) {
-      return data.keys().hasAll(['name']) &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100;
+      return data.keys().hasAll(['name', 'owner_id']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.owner_id == request.auth.uid;
+    }
+
+    function isValidTeamMember(data) {
+      return data.keys().hasAll(['team_id', 'user_id', 'role']) &&
+             data.team_id is string &&
+             data.user_id is string &&
+             data.role in ['owner', 'coach'];
+    }
+
+    function isValidInviteCode(data) {
+      return data.keys().hasAll(['team_id', 'code', 'created_by', 'used']) &&
+             data.team_id is string &&
+             data.code is string &&
+             data.created_by == request.auth.uid &&
+             data.used == false;
     }
 
     function isValidPlayer(data) {
@@ -62,7 +98,8 @@ service cloud.firestore {
              data.teamId is string &&
              data.matchday is int &&
              data.opponent is string && data.opponent.size() > 0 &&
-             data.result is string;
+             data.result is string &&
+             (!('ownGoals' in data) || data.ownGoals is int);
     }
 
     function isValidStat(data) {
@@ -72,27 +109,45 @@ service cloud.firestore {
              data.minutes is int &&
              data.goals is int &&
              data.yellowCards is int &&
-             data.redCards is int;
+             data.redCards is int &&
+             (!('doubleYellowCards' in data) || data.doubleYellowCards is bool);
     }
 
     // Rules
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.uid == userId && isValidUser(request.resource.data);
+    }
+
     match /teams/{teamId} {
-      // Users can only read and write their own teams
-      allow read, update, delete: if isAuthenticated() && (resource == null || resource.data.ownerId == request.auth.uid);
-      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid && isValidTeam(request.resource.data);
+      allow read: if isMember(teamId);
+      allow create: if isAuthenticated() && isValidTeam(request.resource.data);
+      allow update, delete: if isOwner(teamId);
 
       match /players/{playerId} {
-        // Access to subcollections is governed by access to the parent team
-        allow read, write: if isAuthenticated() && get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid;
+        allow read, write: if isMember(teamId);
       }
 
       match /matches/{matchId} {
-        allow read, write: if isAuthenticated() && get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid;
+        allow read, write: if isMember(teamId);
 
         match /stats/{statId} {
-          allow read, write: if isAuthenticated() && get(/databases/$(database)/documents/teams/$(teamId)).data.ownerId == request.auth.uid;
+          allow read, write: if isMember(teamId);
         }
       }
+    }
+
+    match /team_members/{memberId} {
+      // memberId format: userId_teamId
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.user_id || isOwner(resource.data.team_id));
+      allow create: if isAuthenticated() && (request.resource.data.role == 'owner' || exists(/databases/$(database)/documents/invite_codes/$(request.resource.data.invite_code)));
+      allow delete: if isAuthenticated() && isOwner(resource.data.team_id) && resource.data.role != 'owner';
+    }
+
+    match /invite_codes/{codeId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(request.resource.data.team_id) && isValidInviteCode(request.resource.data);
+      allow update: if isAuthenticated() && request.resource.data.used == true && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used']);
     }
   }
 }
