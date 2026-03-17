@@ -46,8 +46,7 @@ service cloud.firestore {
     }
 
     function isMember(teamId) {
-      return isAuthenticated() && 
-        exists(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId));
+      return isAuthenticated() && (isAdmin() || exists(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId)));
     }
 
     function getRole(teamId) {
@@ -55,15 +54,15 @@ service cloud.firestore {
     }
 
     function isOwner(teamId) {
-      return isAuthenticated() && getRole(teamId) == 'owner';
+      return isAuthenticated() && (isAdmin() || getRole(teamId) == 'owner');
     }
 
     // Validation Functions
     function isValidUser(data) {
       return data.keys().hasAll(['google_id', 'name', 'email']) &&
              data.google_id is string &&
-             data.name is string && data.name.size() > 0 &&
-             data.email is string;
+             (data.name == null || data.name is string) &&
+             (data.email == null || data.email is string);
     }
 
     function isValidTeam(data) {
@@ -120,19 +119,19 @@ service cloud.firestore {
     }
 
     match /teams/{teamId} {
-      allow read: if isMember(teamId);
+      allow read: if isAuthenticated() && isMember(teamId);
       allow create: if isAuthenticated() && isValidTeam(request.resource.data);
-      allow update, delete: if isOwner(teamId);
+      allow update, delete: if isAuthenticated() && isOwner(teamId);
 
       match /players/{playerId} {
-        allow read, write: if isMember(teamId);
+        allow read, write: if isAuthenticated() && isMember(teamId);
       }
 
       match /matches/{matchId} {
-        allow read, write: if isMember(teamId);
+        allow read, write: if isAuthenticated() && isMember(teamId);
 
         match /stats/{statId} {
-          allow read, write: if isMember(teamId);
+          allow read, write: if isAuthenticated() && isMember(teamId);
         }
       }
     }
