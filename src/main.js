@@ -335,7 +335,15 @@ async function fetchInitialData(teamId) {
     }
     state.teamMembers = membersData;
     render();
-  }, (error) => handleFirestoreError(error, OperationType.LIST, 'team_members'));
+  }, (error) => {
+    if (state.guestMode && (error.code === 'permission-denied' || error.message?.includes('permissions'))) {
+      console.warn("Guest mode: No permission to list team members. This is expected if the team is not fully public or rules are restrictive.");
+      state.teamMembers = [];
+      render();
+      return;
+    }
+    handleFirestoreError(error, OperationType.LIST, 'team_members');
+  });
 
   // Listen to Players
   const playersQ = query(collection(db, `teams/${teamId}/players`), orderBy('name', 'asc'));
@@ -658,17 +666,6 @@ window.handleViewingCodeInput = (el) => {
   const val = el.value.toUpperCase().replace(/[^A-Z0-9Ñ]/g, '').substring(0, 10);
   state.viewingCodeInput = val;
   el.value = val;
-  
-  const btn = document.getElementById('join-team-btn');
-  if (btn) {
-    const isDisabled = !val || state.loading;
-    btn.disabled = isDisabled;
-    if (isDisabled) {
-      btn.classList.add('opacity-50');
-    } else {
-      btn.classList.remove('opacity-50');
-    }
-  }
 };
 
 window.updateTeam = async (id) => {
@@ -1125,7 +1122,7 @@ function renderLogin() {
               placeholder="Código de equipo..." 
               maxlength="10"
               value="${state.viewingCodeInput}"
-              oninput="handleViewingCodeInput(this)"
+              oninput="handleViewingCodeInput(this); render()"
               class="w-full p-4 rounded-2xl border-2 border-slate-100 focus:border-indigo-600 outline-none text-center font-black tracking-widest uppercase"
             />
             

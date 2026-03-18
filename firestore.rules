@@ -174,7 +174,7 @@ service cloud.firestore {
       // memberId format: userId_teamId
       allow read: if (isAuthenticated() && (request.auth.uid == resource.data.user_id || isOwner(resource.data.team_id))) || 
                     isPublicAdmin(get(/databases/$(database)/documents/teams/$(resource.data.team_id)).data.owner_id) ||
-                    isTeamPublic(resource.data.team_id);
+                    get(/databases/$(database)/documents/teams/$(resource.data.team_id)).data.viewingCode != null;
       allow create: if isAuthenticated() && (request.resource.data.role == 'owner' || exists(/databases/$(database)/documents/invite_codes/$(request.resource.data.invite_code)));
       allow delete: if isAuthenticated() && isOwner(resource.data.team_id) && resource.data.role != 'owner';
     }
