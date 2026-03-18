@@ -651,7 +651,24 @@ window.setEditingTeam = (id, name, viewingCode) => {
 };
 
 window.handleEditViewingCodeChange = (e) => {
-  state.editViewingCode = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  state.editViewingCode = e.target.value.toUpperCase().replace(/[^A-Z0-9Ñ]/g, '').substring(0, 10);
+};
+
+window.handleViewingCodeInput = (el) => {
+  const val = el.value.toUpperCase().replace(/[^A-Z0-9Ñ]/g, '').substring(0, 10);
+  state.viewingCodeInput = val;
+  el.value = val;
+  
+  const btn = document.getElementById('join-team-btn');
+  if (btn) {
+    const isDisabled = !val || state.loading;
+    btn.disabled = isDisabled;
+    if (isDisabled) {
+      btn.classList.add('opacity-50');
+    } else {
+      btn.classList.remove('opacity-50');
+    }
+  }
 };
 
 window.updateTeam = async (id) => {
@@ -1103,14 +1120,17 @@ function renderLogin() {
           
           <div class="space-y-4">
             <input 
+              id="guest-code-input"
               type="text" 
               placeholder="Código de equipo..." 
+              maxlength="10"
               value="${state.viewingCodeInput}"
-              oninput="state.viewingCodeInput = this.value.trim().toUpperCase(); render()"
+              oninput="handleViewingCodeInput(this)"
               class="w-full p-4 rounded-2xl border-2 border-slate-100 focus:border-indigo-600 outline-none text-center font-black tracking-widest uppercase"
             />
             
             <button 
+              id="join-team-btn"
               onclick="joinTeamWithViewingCode()" 
               class="w-full py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 group text-sm"
               ${!state.viewingCodeInput || state.loading ? 'disabled opacity-50' : ''}
@@ -2429,8 +2449,10 @@ function renderModals() {
                 Crea un código único para que otros puedan ver las estadísticas de tu equipo sin necesidad de registrarse.
               </p>
               <input 
+                id="edit-viewing-code-input"
                 type="text"
                 placeholder="Ej: MI-EQUIPO-2024"
+                maxlength="10"
                 class="w-full p-4 rounded-xl border-2 border-white bg-white focus:border-indigo-600 outline-none font-black tracking-widest uppercase text-indigo-600 shadow-sm transition-all"
                 value="${state.editViewingCode}"
                 oninput="handleEditViewingCodeChange(event); render()"
