@@ -1031,7 +1031,7 @@ window.render = () => {
     if (el) {
       el.focus();
       try {
-        if (typeof selectionStart === 'number' && (el.type === 'text' || el.type === 'search' || el.type === 'url' || el.type === 'tel' || el.type === 'password')) {
+        if (typeof selectionStart === 'number' && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && ['text', 'search', 'url', 'tel', 'password', 'email'].includes(el.type || 'text')) {
           el.setSelectionRange(selectionStart, selectionEnd);
         }
       } catch (e) {
@@ -1658,6 +1658,7 @@ function renderDashboard() {
             </h2>
             <div class="flex items-center gap-2">
               <select 
+                id="sort-by-select"
                 onchange="setSortBy(this.value)"
                 class="text-xs font-bold p-2.5 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm"
               >
@@ -2429,6 +2430,7 @@ function renderModals() {
             <div>
               <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Nombre del Equipo</label>
               <input 
+                id="edit-team-name-input"
                 type="text"
                 class="w-full p-4 rounded-2xl border-2 border-slate-100 focus:border-indigo-600 outline-none font-bold text-slate-700 transition-all"
                 value="${state.editTeamName}"
