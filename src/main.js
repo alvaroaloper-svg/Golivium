@@ -100,6 +100,7 @@ window.state = {
   teamStats: null,
   selectedPlayer: null,
   playerSummary: null,
+  guestMode: false,
   loading: true,
   error: null,
   playerToDelete: null,
@@ -157,6 +158,45 @@ window.login = async () => {
   }
 };
 
+window.loginAsGuest = async () => {
+  state.loading = true;
+  state.guestMode = true;
+  state.user = { uid: 'guest', isGuest: true, displayName: 'Invitado', photoURL: 'https://picsum.photos/seed/guest/200/200' };
+  render();
+  
+  try {
+    // Find admin user to get their UID
+    const usersQ = query(collection(db, 'users'), where('email', '==', 'alvaro.aloper@gmail.com'));
+    const adminSnap = await getDocs(usersQ);
+    
+    if (!adminSnap.empty) {
+      const adminUid = adminSnap.docs[0].id;
+      // Fetch admin's teams
+      const teamsQ = query(collection(db, 'teams'), where('owner_id', '==', adminUid));
+      const teamsSnap = await getDocs(teamsQ);
+      state.teams = teamsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      
+      if (state.teams.length > 0) {
+        state.currentTeamId = state.teams[0].id;
+        state.currentTeam = state.teams[0];
+        fetchInitialData(state.currentTeamId);
+      } else {
+        state.loading = false;
+        render();
+      }
+    } else {
+      state.error = "No se encontró el administrador.";
+      state.loading = false;
+      render();
+    }
+  } catch (error) {
+    console.error("Error in guest login:", error);
+    state.error = "Error al entrar como invitado.";
+    state.loading = false;
+    render();
+  }
+};
+
 window.startOnboarding = () => {
   state.onboardingComplete = true;
   localStorage.setItem('onboardingComplete', 'true');
@@ -178,6 +218,7 @@ window.logout = async () => {
 };
 
 onAuthStateChanged(auth, async (user) => {
+  if (state.guestMode && !user) return; // Don't overwrite guest session
   state.user = user;
   state.authReady = true;
   render();
@@ -217,7 +258,7 @@ let unsubPlayers = null;
 let unsubMatches = null;
 
 async function fetchTeams() {
-  if (!state.user) return;
+  if (!state.user || state.guestMode) return;
   if (unsubTeams) unsubTeams();
   
   // Query team_members where user_id == uid
@@ -307,7 +348,7 @@ async function fetchInitialData(teamId) {
     }
     state.teamMembers = membersData;
     render();
-  });
+  }, (error) => handleFirestoreError(error, OperationType.LIST, 'team_members'));
 
   // Listen to Players
   const playersQ = query(collection(db, `teams/${teamId}/players`), orderBy('name', 'asc'));
@@ -968,6 +1009,10 @@ function renderLogin() {
             <svg class="w-5 h-5 group-hover:scale-110 transition-transform" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
             Entrar con Google
           </button>
+          <button onclick="loginAsGuest()" class="w-full mt-4 py-4 bg-white text-slate-600 border-2 border-slate-100 rounded-2xl font-bold hover:bg-slate-50 hover:border-slate-200 transition-all flex items-center justify-center gap-3 group">
+            <span class="w-5 h-5 block group-hover:scale-110 transition-transform">${Icons.Users}</span>
+            Entrar como invitado
+          </button>
         `}
         
         <button onclick="state.onboardingComplete = false; render()" class="mt-6 text-xs font-bold text-slate-400 hover:text-indigo-600 transition-colors uppercase tracking-widest">
@@ -1021,7 +1066,7 @@ function renderHeader() {
                     }"
                   >
                     ${team.name}
-                    ${state.currentTeamId === team.id && team.owner_id === state.user.uid ? `
+                    ${state.currentTeamId === team.id && team.owner_id === state.user.uid && !state.guestMode ? `
                       <div class="flex items-center gap-1 ml-1">
                         <span class="w-3 h-3 block opacity-60 hover:opacity-100 transition-opacity cursor-pointer" onclick="event.stopPropagation(); setEditingTeam('${team.id}', '${team.name}')">
                           ${Icons.Edit2}
@@ -1036,7 +1081,7 @@ function renderHeader() {
             </div>
           `).join('')}
           
-          ${state.isAddingTeam ? `
+          ${!state.guestMode ? (state.isAddingTeam ? `
             <div class="flex items-center bg-white border border-indigo-300 rounded-lg px-2 py-1 shadow-sm shrink-0">
               <input 
                 id="header-new-team-input"
@@ -1064,15 +1109,17 @@ function renderHeader() {
               <span class="w-4 h-4 block text-slate-400 group-hover:text-indigo-600 transition-colors">${Icons.Plus}</span>
               <span class="text-xs font-bold">Crear equipo</span>
             </button>
-          `}
+          `) : ''}
 
-          <button 
-            onclick="setView('join-team')"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all whitespace-nowrap group shrink-0"
-          >
-            <span class="w-4 h-4 block text-slate-400 group-hover:text-indigo-600 transition-colors">${Icons.Users}</span>
-            <span class="text-xs font-bold">Unirse</span>
-          </button>
+          ${!state.guestMode ? `
+            <button 
+              onclick="setView('join-team')"
+              class="flex items-center gap-1.5 px-3 py-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all whitespace-nowrap group shrink-0"
+            >
+              <span class="w-4 h-4 block text-slate-400 group-hover:text-indigo-600 transition-colors">${Icons.Users}</span>
+              <span class="text-xs font-bold">Unirse</span>
+            </button>
+          ` : ''}
         </div>
         
         <div class="flex items-center gap-2">
@@ -1082,7 +1129,13 @@ function renderHeader() {
               <span class="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Admin</span>
             </div>
           ` : ''}
-          ${state.view === 'dashboard' && state.currentTeamId ? `
+          ${state.guestMode ? `
+            <div class="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-slate-100 border border-slate-200 rounded-lg">
+              <span class="w-3 h-3 block text-slate-600">${Icons.Users}</span>
+              <span class="text-[9px] font-black text-slate-600 uppercase tracking-widest">Invitado</span>
+            </div>
+          ` : ''}
+          ${state.view === 'dashboard' && state.currentTeamId && !state.guestMode ? `
             <button onclick="setView('new-match')" class="shrink-0 text-xs sm:text-sm py-2 bg-indigo-600 text-white px-4 rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center gap-2">
               <span class="w-4 h-4 block">${Icons.Plus}</span>
               <span class="hidden sm:inline">Añadir partido</span>
@@ -1473,17 +1526,19 @@ function renderDashboard() {
                 <option value="matches-desc" ${state.sortBy === 'matches-desc' ? 'selected' : ''}>Más Partidos</option>
                 <option value="matches-asc" ${state.sortBy === 'matches-asc' ? 'selected' : ''}>Menos Partidos</option>
               </select>
-              <form onsubmit="addPlayer(event)" class="flex items-center gap-2">
-                <input 
-                  id="new-player-name"
-                  type="text" 
-                  placeholder="Nuevo jugador..." 
-                  class="text-xs font-bold p-2.5 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-indigo-500 outline-none w-32 sm:w-48 shadow-sm"
-                />
-                <button type="submit" class="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-600/10">
-                  <span class="w-4 h-4 block">${Icons.Plus}</span>
-                </button>
-              </form>
+              ${!state.guestMode ? `
+                <form onsubmit="addPlayer(event)" class="flex items-center gap-2">
+                  <input 
+                    id="new-player-name"
+                    type="text" 
+                    placeholder="Nuevo jugador..." 
+                    class="text-xs font-bold p-2.5 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-indigo-500 outline-none w-32 sm:w-48 shadow-sm"
+                  />
+                  <button type="submit" class="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-600/10">
+                    <span class="w-4 h-4 block">${Icons.Plus}</span>
+                  </button>
+                </form>
+              ` : ''}
             </div>
           </div>
           <div class="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
@@ -1528,12 +1583,14 @@ function renderDashboard() {
                       </div>
                     </div>
                     <div class="flex items-center gap-1">
-                      <button onclick="event.stopPropagation(); setEditingPlayer('${player.id}', '${player.name}')" class="p-2 text-slate-300 hover:text-indigo-600 hover:bg-white rounded-xl transition-all opacity-0 group-hover:opacity-100 shadow-sm">
-                        <span class="w-4 h-4 block">${Icons.Edit2}</span>
-                      </button>
-                      <button onclick="event.stopPropagation(); confirmDeletePlayer(${JSON.stringify(player).replace(/"/g, '&quot;')})" class="p-2 text-slate-300 hover:text-red-600 hover:bg-white rounded-xl transition-all opacity-0 group-hover:opacity-100 shadow-sm">
-                        <span class="w-4 h-4 block">${Icons.Trash2}</span>
-                      </button>
+                      ${!state.guestMode ? `
+                        <button onclick="event.stopPropagation(); setEditingPlayer('${player.id}', '${player.name}')" class="p-2 text-slate-300 hover:text-indigo-600 hover:bg-white rounded-xl transition-all opacity-0 group-hover:opacity-100 shadow-sm">
+                          <span class="w-4 h-4 block">${Icons.Edit2}</span>
+                        </button>
+                        <button onclick="event.stopPropagation(); confirmDeletePlayer(${JSON.stringify(player).replace(/"/g, '&quot;')})" class="p-2 text-slate-300 hover:text-red-600 hover:bg-white rounded-xl transition-all opacity-0 group-hover:opacity-100 shadow-sm">
+                          <span class="w-4 h-4 block">${Icons.Trash2}</span>
+                        </button>
+                      ` : ''}
                       <span class="w-5 h-5 block text-slate-300 group-hover:text-indigo-600 transition-colors ml-2">${Icons.ChevronRight}</span>
                     </div>
                   `}
@@ -1571,12 +1628,14 @@ function renderDashboard() {
                       <div class="flex justify-between items-center mb-2">
                         <span class="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Jornada ${match.matchday}</span>
                         <div class="flex items-center gap-1.5">
-                          <button onclick="editMatch('${match.id}')" class="p-1.5 text-slate-300 hover:text-indigo-600 hover:bg-white rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-sm">
-                            <span class="w-3.5 h-3.5 block">${Icons.Edit2}</span>
-                          </button>
-                          <button onclick="confirmDeleteMatch(${JSON.stringify(match).replace(/"/g, '&quot;')})" class="p-1.5 text-slate-300 hover:text-red-600 hover:bg-white rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-sm">
-                            <span class="w-3.5 h-3.5 block">${Icons.Trash2}</span>
-                          </button>
+                          ${!state.guestMode ? `
+                            <button onclick="editMatch('${match.id}')" class="p-1.5 text-slate-300 hover:text-indigo-600 hover:bg-white rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-sm">
+                              <span class="w-3.5 h-3.5 block">${Icons.Edit2}</span>
+                            </button>
+                            <button onclick="confirmDeleteMatch(${JSON.stringify(match).replace(/"/g, '&quot;')})" class="p-1.5 text-slate-300 hover:text-red-600 hover:bg-white rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-sm">
+                              <span class="w-3.5 h-3.5 block">${Icons.Trash2}</span>
+                            </button>
+                          ` : ''}
                           <span class="text-sm font-black ${resultColor} text-white px-2.5 py-1 rounded-lg tabular-nums shadow-sm ml-1">${match.result}</span>
                         </div>
                       </div>
