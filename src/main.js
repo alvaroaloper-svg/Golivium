@@ -133,6 +133,7 @@ window.login = async () => {
       name: user.displayName,
       email: user.email,
       avatar_url: user.photoURL,
+      role: user.email === 'alvaro.aloper@gmail.com' ? 'admin' : 'user',
       created_at: serverTimestamp(),
     };
     
@@ -194,6 +195,7 @@ onAuthStateChanged(auth, async (user) => {
           name: user.displayName,
           email: user.email,
           avatar_url: user.photoURL,
+          role: user.email === 'alvaro.aloper@gmail.com' ? 'admin' : 'user',
           created_at: serverTimestamp(),
         };
         await setDoc(userRef, userData);
@@ -1074,6 +1076,12 @@ function renderHeader() {
         </div>
         
         <div class="flex items-center gap-2">
+          ${state.userData?.role === 'admin' ? `
+            <div class="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-indigo-50 border border-indigo-100 rounded-lg">
+              <span class="w-3 h-3 block text-indigo-600">${Icons.Trophy}</span>
+              <span class="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Admin</span>
+            </div>
+          ` : ''}
           ${state.view === 'dashboard' && state.currentTeamId ? `
             <button onclick="setView('new-match')" class="shrink-0 text-xs sm:text-sm py-2 bg-indigo-600 text-white px-4 rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center gap-2">
               <span class="w-4 h-4 block">${Icons.Plus}</span>
@@ -1128,7 +1136,10 @@ function renderProfile() {
           <div class="relative -mt-16 mb-6">
             <img src="${state.user.photoURL}" alt="${state.user.displayName}" class="w-32 h-32 rounded-[2rem] border-4 border-white shadow-xl object-cover" referrerPolicy="no-referrer" />
           </div>
-          <h2 class="text-3xl font-black tracking-tight text-slate-900">${state.user.displayName}</h2>
+          <h2 class="text-3xl font-black tracking-tight text-slate-900 flex items-center gap-2">
+            ${state.user.displayName}
+            ${state.userData?.role === 'admin' ? '<span class="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded-full font-black uppercase tracking-widest">Admin</span>' : ''}
+          </h2>
           <p class="text-slate-500 font-medium mb-8">${state.user.email}</p>
           
           <div class="space-y-4">

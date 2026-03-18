@@ -42,7 +42,12 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && 
-        (request.auth.token.email == "alvaro.aloper@gmail.com" && request.auth.token.email_verified == true);
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "alvaro.aloper@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isDocOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
 
     function isMember(teamId) {
@@ -62,7 +67,8 @@ service cloud.firestore {
       return data.keys().hasAll(['google_id', 'name', 'email']) &&
              data.google_id is string &&
              (data.name == null || data.name is string) &&
-             (data.email == null || data.email is string);
+             (data.email == null || data.email is string) &&
+             (!('role' in data) || data.role in ['admin', 'user']);
     }
 
     function isValidTeam(data) {
@@ -115,7 +121,10 @@ service cloud.firestore {
     // Rules
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && request.auth.uid == userId && isValidUser(request.resource.data);
+      allow create: if isAuthenticated() && isDocOwner(userId) && isValidUser(request.resource.data) && 
+                      (!('role' in request.resource.data) || request.resource.data.role == 'user' || isAdmin());
+      allow update: if isAuthenticated() && isDocOwner(userId) && isValidUser(request.resource.data) && 
+                      (!('role' in request.resource.data) || request.resource.data.role == resource.data.role || isAdmin());
     }
 
     match /teams/{teamId} {

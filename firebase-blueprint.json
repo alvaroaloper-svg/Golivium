@@ -8,6 +8,7 @@
         "google_id": { "type": "string", "description": "Google User ID" },
         "name": { "type": "string", "description": "Display name" },
         "email": { "type": "string", "description": "Email address" },
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "User role" },
         "avatar_url": { "type": "string", "description": "Profile picture URL" },
         "created_at": { "type": "string", "format": "date-time" }
       },
