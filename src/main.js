@@ -1129,11 +1129,11 @@ function renderLogin() {
             <button 
               id="join-team-btn"
               onclick="joinTeamWithViewingCode()" 
-              class="w-max mx-auto px-8 py-2 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 group text-sm"
+              class="w-auto px-8 py-2 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 group text-sm mx-auto"
               ${!state.viewingCodeInput || state.loading ? 'disabled opacity-50' : ''}
             >
               ${state.loading ? Icons.Loader : Icons.Check}
-              Ver Equipo
+              Entrar
             </button>
             
             <div class="grid grid-cols-2 gap-3">
