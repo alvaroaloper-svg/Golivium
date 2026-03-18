@@ -47,8 +47,10 @@ service cloud.firestore {
     }
 
     function isPublicAdmin(userId) {
-      let user = get(/databases/$(database)/documents/users/$(userId)).data;
-      return user.role == 'admin' || user.email == 'alvaro.aloper@gmail.com';
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/users/$(userId)) &&
+             (get(/databases/$(database)/documents/users/$(userId)).data.role == 'admin' || 
+              get(/databases/$(database)/documents/users/$(userId)).data.email == 'alvaro.aloper@gmail.com');
     }
 
     function isDocOwner(userId) {
@@ -79,7 +81,8 @@ service cloud.firestore {
     function isValidTeam(data) {
       return data.keys().hasAll(['name', 'owner_id']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.owner_id == request.auth.uid;
+             data.owner_id == request.auth.uid &&
+             (!('viewingCode' in data) || data.viewingCode is string);
     }
 
     function isValidTeamMember(data) {
@@ -123,9 +126,13 @@ service cloud.firestore {
              (!('doubleYellowCards' in data) || data.doubleYellowCards is bool);
     }
 
+    function isTeamPublic(teamId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)).data.viewingCode != null;
+    }
+
     // Rules
     match /users/{userId} {
-      allow read: if isAuthenticated() || resource.data.email == "alvaro.aloper@gmail.com";
+      allow read: if isAuthenticated() || isPublicAdmin(userId) || resource.data.email == "alvaro.aloper@gmail.com";
       allow create: if isAuthenticated() && isDocOwner(userId) && isValidUser(request.resource.data) && 
                       (!('role' in request.resource.data) || request.resource.data.role == 'user' || isAdmin());
       allow update: if isAuthenticated() && isDocOwner(userId) && isValidUser(request.resource.data) && 
@@ -133,30 +140,41 @@ service cloud.firestore {
     }
 
     match /teams/{teamId} {
-      allow read: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(resource.data.owner_id);
+      allow get: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(resource.data.owner_id) || (resource.data.viewingCode != null);
+      allow list: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(resource.data.owner_id);
       allow create: if isAuthenticated() && isValidTeam(request.resource.data);
       allow update, delete: if isAuthenticated() && isOwner(teamId);
 
       match /players/{playerId} {
-        allow read: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(get(/databases/$(database)/documents/teams/$(teamId)).data.owner_id);
+        allow read: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(get(/databases/$(database)/documents/teams/$(teamId)).data.owner_id) || isTeamPublic(teamId);
         allow write: if isAuthenticated() && isMember(teamId);
       }
 
       match /matches/{matchId} {
-        allow read: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(get(/databases/$(database)/documents/teams/$(teamId)).data.owner_id);
+        allow read: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(get(/databases/$(database)/documents/teams/$(teamId)).data.owner_id) || isTeamPublic(teamId);
         allow write: if isAuthenticated() && isMember(teamId);
 
         match /stats/{statId} {
-          allow read: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(get(/databases/$(database)/documents/teams/$(teamId)).data.owner_id);
+          allow read: if (isAuthenticated() && isMember(teamId)) || isPublicAdmin(get(/databases/$(database)/documents/teams/$(teamId)).data.owner_id) || isTeamPublic(teamId);
           allow write: if isAuthenticated() && isMember(teamId);
         }
       }
     }
 
+    match /viewing_codes/{code} {
+      allow get: if true;
+      allow create, update, delete: if isAuthenticated() && isOwner(request.resource.data.teamId || resource.data.teamId);
+    }
+
+    match /team_codes/{code} {
+      allow get: if isAuthenticated();
+    }
+
     match /team_members/{memberId} {
       // memberId format: userId_teamId
       allow read: if (isAuthenticated() && (request.auth.uid == resource.data.user_id || isOwner(resource.data.team_id))) || 
-                    isPublicAdmin(get(/databases/$(database)/documents/teams/$(resource.data.team_id)).data.owner_id);
+                    isPublicAdmin(get(/databases/$(database)/documents/teams/$(resource.data.team_id)).data.owner_id) ||
+                    isTeamPublic(resource.data.team_id);
       allow create: if isAuthenticated() && (request.resource.data.role == 'owner' || exists(/databases/$(database)/documents/invite_codes/$(request.resource.data.invite_code)));
       allow delete: if isAuthenticated() && isOwner(resource.data.team_id) && resource.data.role != 'owner';
     }

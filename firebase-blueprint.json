@@ -21,7 +21,8 @@
       "properties": {
         "name": { "type": "string", "description": "Name of the team" },
         "owner_id": { "type": "string", "description": "UID of the user who owns this team" },
-        "created_at": { "type": "string", "format": "date-time" }
+        "created_at": { "type": "string", "format": "date-time" },
+        "viewingCode": { "type": "string", "description": "Code for guest viewing access" }
       },
       "required": ["name", "owner_id"]
     },

@@ -1,4 +1,5 @@
 import './index.css';
+import * as XLSX from 'xlsx';
 import { 
   db, 
   auth, 
@@ -66,11 +67,13 @@ const Icons = {
   Trash2: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>',
   X: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>',
   Check: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  Download: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
   Refresh: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>',
   User: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   ArrowLeft: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" x2="5" y1="12" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
   Save: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
   Clock: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  Loader: '<svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>',
 };
 
 let matchFormState = {
@@ -81,7 +84,8 @@ let matchFormState = {
   goalsVisitor: 0,
   ownGoals: 0,
   playerStats: [],
-  validationError: null
+  validationError: null,
+  saving: false
 };
 
 // --- State ---
@@ -117,6 +121,8 @@ window.state = {
   inviteCode: null,
   joinCode: '',
   teamMembers: [],
+  viewingCodeInput: '',
+  editViewingCode: '',
 };
 
 // --- Auth Functions ---
@@ -154,47 +160,23 @@ window.login = async () => {
     
     state.userData = (await getDoc(userRef)).data();
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, 'users');
+    if (error.code === 'auth/popup-closed-by-user') {
+      state.loading = false;
+      state.error = "Has cerrado la ventana de inicio de sesión.";
+      render();
+    } else {
+      handleFirestoreError(error, OperationType.WRITE, 'users');
+    }
   }
 };
 
 window.loginAsGuest = async () => {
-  state.loading = true;
   state.guestMode = true;
   state.user = { uid: 'guest', isGuest: true, displayName: 'Invitado', photoURL: 'https://picsum.photos/seed/guest/200/200' };
+  state.teams = [];
+  state.currentTeamId = null;
+  state.currentTeam = null;
   render();
-  
-  try {
-    // Find admin user to get their UID
-    const usersQ = query(collection(db, 'users'), where('email', '==', 'alvaro.aloper@gmail.com'));
-    const adminSnap = await getDocs(usersQ);
-    
-    if (!adminSnap.empty) {
-      const adminUid = adminSnap.docs[0].id;
-      // Fetch admin's teams
-      const teamsQ = query(collection(db, 'teams'), where('owner_id', '==', adminUid));
-      const teamsSnap = await getDocs(teamsQ);
-      state.teams = teamsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      
-      if (state.teams.length > 0) {
-        state.currentTeamId = state.teams[0].id;
-        state.currentTeam = state.teams[0];
-        fetchInitialData(state.currentTeamId);
-      } else {
-        state.loading = false;
-        render();
-      }
-    } else {
-      state.error = "No se encontró el administrador.";
-      state.loading = false;
-      render();
-    }
-  } catch (error) {
-    console.error("Error in guest login:", error);
-    state.error = "Error al entrar como invitado.";
-    state.loading = false;
-    render();
-  }
 };
 
 window.startOnboarding = () => {
@@ -338,12 +320,17 @@ async function fetchInitialData(teamId) {
     for (const memberDoc of snapshot.docs) {
       const member = memberDoc.data();
       try {
+        // Only try to fetch user details if authenticated or if it's a known public admin
+        // Guests might not have permission to read all users
         const userSnap = await getDoc(doc(db, 'users', member.user_id));
         if (userSnap.exists()) {
           membersData.push({ ...member, ...userSnap.data() });
+        } else {
+          membersData.push({ ...member, name: 'Usuario' });
         }
       } catch (e) {
-        console.error(`Error fetching user ${member.user_id}:`, e);
+        console.warn(`Could not fetch user ${member.user_id} (likely permission issue for guest):`, e);
+        membersData.push({ ...member, name: 'Miembro del equipo' });
       }
     }
     state.teamMembers = membersData;
@@ -473,6 +460,38 @@ function calculateTeamStats() {
     totalOwnGoals: totalOwnGoals
   };
 }
+
+window.exportToExcel = () => {
+  if (!state.currentTeam) return;
+  
+  const teamName = state.currentTeam.name;
+  const wb = XLSX.utils.book_new();
+  
+  // 1. Players Sheet
+  const playersData = state.players.map(p => ({
+    'Nombre': p.name,
+    'Partidos Jugados': p.totalMatches || 0,
+    'Goles': p.totalGoals || 0,
+    'Tarjetas Amarillas': p.totalYellowCards || 0,
+    'Doble Amarilla': p.totalDoubleYellowCards || 0,
+    'Tarjetas Rojas': p.totalRedCards || 0
+  }));
+  const wsPlayers = XLSX.utils.json_to_sheet(playersData);
+  XLSX.utils.book_append_sheet(wb, wsPlayers, "Plantilla");
+  
+  // 2. Matches Sheet
+  const matchesData = state.matches.map(m => ({
+    'Jornada': m.matchday,
+    'Rival': m.opponent,
+    'Resultado': m.result,
+    'Goles Propios': m.ownGoals || 0
+  }));
+  const wsMatches = XLSX.utils.json_to_sheet(matchesData);
+  XLSX.utils.book_append_sheet(wb, wsMatches, "Partidos");
+  
+  // Write and download
+  XLSX.writeFile(wb, `${teamName}_Estadisticas.xlsx`);
+};
 
 window.fetchPlayerStats = async (player) => {
   try {
@@ -624,25 +643,103 @@ window.joinTeamWithCode = async () => {
   }
 };
 
-window.setEditingTeam = (id, name) => {
+window.setEditingTeam = (id, name, viewingCode) => {
   state.editingTeamId = id;
   state.editTeamName = name;
+  state.editViewingCode = viewingCode || '';
   render();
 };
 
-window.handleEditTeamNameChange = (e) => {
-  state.editTeamName = e.target.value;
+window.handleEditViewingCodeChange = (e) => {
+  state.editViewingCode = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
 };
 
 window.updateTeam = async (id) => {
   if (!state.editTeamName.trim()) return;
+  state.loading = true;
+  render();
   try {
-    await updateDoc(doc(db, 'teams', id), {
-      name: state.editTeamName.trim()
+    const teamRef = doc(db, 'teams', id);
+    const teamSnap = await getDoc(teamRef);
+    const oldViewingCode = teamSnap.data().viewingCode;
+    const newViewingCode = state.editViewingCode.trim();
+
+    // 1. Update Team document
+    await updateDoc(teamRef, {
+      name: state.editTeamName.trim(),
+      viewingCode: newViewingCode || null
     });
+
+    // 2. Manage viewing_codes collection
+    if (oldViewingCode && oldViewingCode !== newViewingCode) {
+      await deleteDoc(doc(db, 'viewing_codes', oldViewingCode));
+    }
+    if (newViewingCode && newViewingCode !== oldViewingCode) {
+      // Check if code is already taken
+      const codeRef = doc(db, 'viewing_codes', newViewingCode);
+      const codeSnap = await getDoc(codeRef);
+      if (codeSnap.exists() && codeSnap.data().teamId !== id) {
+        state.error = "Ese código ya está en uso por otro equipo.";
+        state.loading = false;
+        render();
+        return;
+      }
+      await setDoc(codeRef, { teamId: id });
+    }
+
     state.editingTeamId = null;
+    state.loading = false;
+    fetchTeams();
   } catch (error) {
+    state.loading = false;
     handleFirestoreError(error, OperationType.UPDATE, `teams/${id}`);
+  }
+};
+
+window.joinTeamWithViewingCode = async () => {
+  if (!state.viewingCodeInput) return;
+  state.loading = true;
+  state.error = null;
+  render();
+  
+  try {
+    const code = state.viewingCodeInput.trim().toUpperCase();
+    const codeRef = doc(db, 'viewing_codes', code);
+    const codeSnap = await getDoc(codeRef);
+    
+    if (codeSnap.exists()) {
+      const teamId = codeSnap.data().teamId;
+      const teamRef = doc(db, 'teams', teamId);
+      const teamSnap = await getDoc(teamRef);
+      
+      if (teamSnap.exists()) {
+        const teamData = { id: teamSnap.id, ...teamSnap.data() };
+        state.teams = [teamData];
+        state.currentTeamId = teamId;
+        state.currentTeam = teamData;
+        state.viewingCodeInput = '';
+        state.loading = false;
+        fetchInitialData(teamId);
+        render();
+      } else {
+        state.error = "El equipo asociado al código ya no existe.";
+        state.loading = false;
+        render();
+      }
+    } else {
+      state.error = "Código de equipo no válido.";
+      state.loading = false;
+      render();
+    }
+  } catch (error) {
+    console.error("Error joining with viewing code:", error);
+    if (error.code === 'permission-denied') {
+      state.error = "Permiso denegado. Asegúrate de que el código es correcto.";
+    } else {
+      state.error = "Error al buscar el equipo.";
+    }
+    state.loading = false;
+    render();
   }
 };
 
@@ -675,6 +772,11 @@ window.deleteTeam = async () => {
     }
 
     // 3. Delete the Team itself
+    const teamSnap = await getDoc(doc(db, 'teams', id));
+    const viewingCode = teamSnap.data()?.viewingCode;
+    if (viewingCode) {
+      await deleteDoc(doc(db, 'viewing_codes', viewingCode));
+    }
     await deleteDoc(doc(db, 'teams', id));
     
     // If we deleted the current team, switch to another one if available
@@ -825,8 +927,8 @@ window.editMatch = (id) => {
 
 const renderPlayerAvatar = (player, sizeClass = 'w-12 h-12') => {
   const id = player.id || player.playerId;
-  const clickHandler = id ? `onclick="event.stopPropagation(); triggerPhotoUpload('${id}')"` : '';
-  const cursorClass = id ? 'cursor-pointer hover:ring-2 hover:ring-indigo-500 transition-all' : '';
+  const clickHandler = (id && !state.guestMode) ? `onclick="event.stopPropagation(); triggerPhotoUpload('${id}')"` : '';
+  const cursorClass = (id && !state.guestMode) ? 'cursor-pointer hover:ring-2 hover:ring-indigo-500 transition-all' : '';
 
   if (player.photoUrl) {
     return `
@@ -862,8 +964,8 @@ window.render = () => {
     return;
   }
 
-  if (!state.user) {
-    if (!state.onboardingComplete) {
+  if (!state.user || (state.guestMode && !state.currentTeamId)) {
+    if (!state.user && !state.onboardingComplete) {
       app.innerHTML = renderOnboarding();
     } else {
       app.innerHTML = renderLogin();
@@ -989,6 +1091,48 @@ function renderOnboarding() {
 }
 
 function renderLogin() {
+  if (state.guestMode && !state.currentTeamId) {
+    return `
+      <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div class="bg-white p-8 rounded-[2rem] shadow-xl border border-slate-100 max-w-md w-full text-center">
+          <div class="bg-indigo-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-indigo-600/20">
+            <span class="w-8 h-8 block text-white font-black text-xl flex items-center justify-center">G</span>
+          </div>
+          <h2 class="text-xl font-bold tracking-tight mb-2">Modo Invitado</h2>
+          <p class="text-slate-500 mb-8">Introduce el código de visualización del equipo para continuar.</p>
+          
+          <div class="space-y-4">
+            <input 
+              type="text" 
+              placeholder="Código de equipo..." 
+              value="${state.viewingCodeInput}"
+              oninput="state.viewingCodeInput = this.value.trim().toUpperCase(); render()"
+              class="w-full p-4 rounded-2xl border-2 border-slate-100 focus:border-indigo-600 outline-none text-center font-black tracking-widest uppercase"
+            />
+            
+            <button 
+              onclick="joinTeamWithViewingCode()" 
+              class="w-full py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 group text-sm"
+              ${!state.viewingCodeInput || state.loading ? 'disabled opacity-50' : ''}
+            >
+              ${state.loading ? Icons.Loader : Icons.Check}
+              Ver Equipo
+            </button>
+            
+            <div class="grid grid-cols-2 gap-3">
+              <button onclick="state.guestMode = false; state.user = null; render()" class="py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all text-sm">
+                Volver
+              </button>
+              <button onclick="login()" class="py-3 bg-white text-indigo-600 border border-indigo-100 rounded-xl font-bold hover:bg-indigo-50 transition-all text-sm">
+                Iniciar Sesión
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   return `
     <div class="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div class="bg-white p-8 rounded-[2rem] shadow-xl border border-slate-100 max-w-md w-full text-center">
@@ -1039,45 +1183,26 @@ function renderHeader() {
         <div class="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto no-scrollbar py-1 px-2">
           ${state.teams.map(team => `
             <div class="relative group flex items-center shrink-0">
-              ${state.editingTeamId === team.id ? `
-                <div class="flex items-center bg-white border border-indigo-300 rounded-lg px-2 py-1 shadow-sm">
-                  <input 
-                    id="edit-team-name-input"
-                    autofocus
-                    class="text-xs font-bold outline-none w-24"
-                    value="${state.editTeamName}"
-                    oninput="handleEditTeamNameChange(event)"
-                    onkeydown="if(event.key === 'Enter') updateTeam('${team.id}')"
-                  />
-                  <button onclick="updateTeam('${team.id}')" class="text-emerald-600 ml-1 p-0.5 hover:bg-emerald-50 rounded">
-                    <span class="w-3 h-3 block">${Icons.Check}</span>
-                  </button>
-                  <button onclick="state.editingTeamId = null; render()" class="text-slate-400 ml-1 p-0.5 hover:bg-slate-50 rounded">
-                    <span class="w-3 h-3 block">${Icons.X}</span>
-                  </button>
-                </div>
-              ` : `
-                  <button
-                    onclick="setCurrentTeam('${team.id}')"
-                    class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
-                      state.currentTeamId === team.id 
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20' 
-                        : 'text-slate-500 hover:bg-slate-100'
-                    }"
-                  >
-                    ${team.name}
-                    ${state.currentTeamId === team.id && team.owner_id === state.user.uid && !state.guestMode ? `
-                      <div class="flex items-center gap-1 ml-1">
-                        <span class="w-3 h-3 block opacity-60 hover:opacity-100 transition-opacity cursor-pointer" onclick="event.stopPropagation(); setEditingTeam('${team.id}', '${team.name}')">
-                          ${Icons.Edit2}
-                        </span>
-                        <span class="w-3 h-3 block opacity-60 hover:opacity-100 transition-opacity cursor-pointer text-red-200 hover:text-red-400" onclick="event.stopPropagation(); confirmDeleteTeam('${team.id}', '${team.name}')">
-                          ${Icons.Trash2}
-                        </span>
-                      </div>
-                    ` : ''}
-                  </button>
-              `}
+              <button
+                onclick="setCurrentTeam('${team.id}')"
+                class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+                  state.currentTeamId === team.id 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20' 
+                    : 'text-slate-500 hover:bg-slate-100'
+                }"
+              >
+                ${team.name}
+                ${state.currentTeamId === team.id && team.owner_id === state.user.uid && !state.guestMode ? `
+                  <div class="flex items-center gap-1 ml-1">
+                    <span class="w-3 h-3 block opacity-60 hover:opacity-100 transition-opacity cursor-pointer" onclick="event.stopPropagation(); setEditingTeam('${team.id}', '${team.name}', '${team.viewingCode || ''}')">
+                      ${Icons.Edit2}
+                    </span>
+                    <span class="w-3 h-3 block opacity-60 hover:opacity-100 transition-opacity cursor-pointer text-red-200 hover:text-red-400" onclick="event.stopPropagation(); confirmDeleteTeam('${team.id}', '${team.name}')">
+                      ${Icons.Trash2}
+                    </span>
+                  </div>
+                ` : ''}
+              </button>
             </div>
           `).join('')}
           
@@ -1709,6 +1834,13 @@ function renderWarnings() {
           </div>
         </div>
       </div>
+
+      <div class="mt-12 mb-8 flex justify-center">
+        <button onclick="exportToExcel()" class="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all hover:scale-[1.02] active:scale-95 text-sm uppercase tracking-wider">
+          <span class="w-5 h-5 block">${Icons.Download}</span>
+          Exportar Datos a Excel
+        </button>
+      </div>
     </section>
   `;
 }
@@ -1867,15 +1999,15 @@ window.handlePlayerStatChange = (playerId, field, val) => {
     if (typeof val === 'boolean') {
       stat[field] = val;
       render();
+    } else if (field === 'yellowCards' || field === 'redCards') {
+      // Toggle logic for cards
+      stat[field] = stat[field] > 0 ? 0 : 1;
+      render();
     } else {
       let numVal = parseInt(val) || 0;
       // Limit minutes to 0-90
       if (field === 'minutes') {
         numVal = Math.min(90, Math.max(0, numVal));
-      }
-      // Limit cards to maximum 1
-      if (field === 'yellowCards' || field === 'redCards') {
-        numVal = Math.min(1, Math.max(0, numVal));
       }
       stat[field] = numVal;
       render();
@@ -1885,6 +2017,7 @@ window.handlePlayerStatChange = (playerId, field, val) => {
 
 window.saveMatch = async (e) => {
   e.preventDefault();
+  if (matchFormState.saving) return;
   
   // Validation: Total goals must match individual goals + own goals
   const totalIndividualGoals = matchFormState.playerStats.reduce((sum, s) => sum + (s.goals || 0), 0);
@@ -1897,6 +2030,8 @@ window.saveMatch = async (e) => {
   }
 
   matchFormState.validationError = null;
+  matchFormState.saving = true;
+  render();
   
   try {
     let matchId = state.editingMatchId;
@@ -1937,10 +2072,13 @@ window.saveMatch = async (e) => {
       }
     }
     
+    matchFormState.saving = false;
     state.editingMatchId = null;
     state.view = 'dashboard';
     render();
   } catch (error) {
+    matchFormState.saving = false;
+    render();
     handleFirestoreError(error, OperationType.WRITE, `teams/${state.currentTeamId}/matches`);
   }
 };
@@ -2090,16 +2228,15 @@ function renderMatchForm() {
                       />
                     </td>
                     <td class="px-6 py-4">
-                      <input 
+                      <button 
                         id="stat-yellow-${stat.playerId}"
-                        type="number" 
-                        min="0"
-                        max="1"
-                        value="${stat.yellowCards}"
+                        type="button"
                         ${stat.doubleYellowCards ? 'disabled' : ''}
-                        onchange="handlePlayerStatChange('${stat.playerId}', 'yellowCards', this.value)"
-                        class="w-16 p-1.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-center text-sm ${stat.doubleYellowCards ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : ''}"
-                      />
+                        onclick="handlePlayerStatChange('${stat.playerId}', 'yellowCards')"
+                        class="w-full py-2 rounded-lg border ${stat.yellowCards > 0 ? 'bg-amber-400 border-amber-500 text-white' : 'bg-slate-50 border-slate-200 text-slate-400'} transition-all flex items-center justify-center gap-1 ${stat.doubleYellowCards ? 'opacity-50 cursor-not-allowed' : ''}"
+                      >
+                        <span class="text-[10px] font-bold uppercase">${stat.yellowCards > 0 ? 'SÍ' : 'NO'}</span>
+                      </button>
                     </td>
                     <td class="px-6 py-4">
                       <button 
@@ -2108,25 +2245,18 @@ function renderMatchForm() {
                         onclick="handlePlayerStatChange('${stat.playerId}', 'doubleYellowCards', ${!stat.doubleYellowCards})"
                         class="w-full py-2 rounded-lg border ${stat.doubleYellowCards ? 'bg-amber-500 border-amber-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-400'} transition-all flex items-center justify-center gap-1"
                       >
-                        ${stat.doubleYellowCards ? `
-                          <div class="relative w-4 h-4 mr-1">
-                            <div class="absolute top-0 left-0 w-2.5 h-3.5 bg-white rounded-sm"></div>
-                            <div class="absolute top-1 left-1 w-2.5 h-3.5 bg-white rounded-sm border-l border-t border-amber-500"></div>
-                          </div>
-                        ` : ''}
                         <span class="text-[10px] font-bold uppercase">${stat.doubleYellowCards ? 'SÍ' : 'NO'}</span>
                       </button>
                     </td>
                     <td class="px-6 py-4">
-                      <input 
+                      <button 
                         id="stat-red-${stat.playerId}"
-                        type="number" 
-                        min="0"
-                        max="1"
-                        value="${stat.redCards}"
-                        onchange="handlePlayerStatChange('${stat.playerId}', 'redCards', this.value)"
-                        class="w-16 p-1.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-center text-sm"
-                      />
+                        type="button"
+                        onclick="handlePlayerStatChange('${stat.playerId}', 'redCards')"
+                        class="w-full py-2 rounded-lg border ${stat.redCards > 0 ? 'bg-red-500 border-red-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-400'} transition-all flex items-center justify-center gap-1"
+                      >
+                        <span class="text-[10px] font-bold uppercase">${stat.redCards > 0 ? 'SÍ' : 'NO'}</span>
+                      </button>
                     </td>
                   </tr>
                 `).join('')}
@@ -2158,9 +2288,13 @@ function renderMatchForm() {
           <button type="button" onclick="setView('dashboard')" class="px-6 py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-all">
             Cancelar
           </button>
-          <button type="submit" class="px-8 py-3 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2">
-            <span class="w-5 h-5 block">${Icons.Save}</span>
-            Guardar Partido
+          <button 
+            type="submit" 
+            class="px-8 py-3 rounded-xl font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            ${matchFormState.saving ? 'disabled' : ''}
+          >
+            <span class="w-5 h-5 block">${matchFormState.saving ? Icons.Loader : Icons.Save}</span>
+            ${matchFormState.saving ? 'Guardando...' : 'Guardar Partido'}
           </button>
         </div>
       </form>
@@ -2252,6 +2386,69 @@ function renderModals() {
             <button class="flex-1 px-4 py-2 rounded-xl font-medium bg-red-500 text-white hover:bg-red-600" onclick="deleteTeam()">
               Eliminar
             </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  if (state.editingTeamId) {
+    const team = state.teams.find(t => t.id === state.editingTeamId);
+    modalHtml += `
+      <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div class="bg-white rounded-[2rem] shadow-2xl max-w-md w-full p-8 border border-slate-100">
+          <div class="flex items-center justify-between mb-6">
+            <div class="bg-indigo-100 p-3 rounded-2xl">
+              <span class="w-6 h-6 block text-indigo-600">${Icons.Edit2}</span>
+            </div>
+            <button onclick="state.editingTeamId = null; render()" class="text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-50 rounded-full transition-all">
+              <span class="w-6 h-6 block">${Icons.X}</span>
+            </button>
+          </div>
+          
+          <h3 class="text-2xl font-black text-slate-900 mb-2 tracking-tight">Configurar Equipo</h3>
+          <p class="text-slate-500 mb-8 text-sm">Actualiza el nombre de tu equipo y gestiona el acceso para invitados.</p>
+          
+          <div class="space-y-6">
+            <div>
+              <label class="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 ml-1">Nombre del Equipo</label>
+              <input 
+                type="text"
+                class="w-full p-4 rounded-2xl border-2 border-slate-100 focus:border-indigo-600 outline-none font-bold text-slate-700 transition-all"
+                value="${state.editTeamName}"
+                oninput="state.editTeamName = this.value; render()"
+                placeholder="Nombre del equipo..."
+              />
+            </div>
+            
+            <div class="bg-indigo-50/50 p-6 rounded-[1.5rem] border border-indigo-100">
+              <div class="flex items-center gap-3 mb-3">
+                <span class="w-5 h-5 block text-indigo-600">${Icons.Users}</span>
+                <label class="block text-[10px] font-black text-indigo-600 uppercase tracking-widest">Código para Invitados</label>
+              </div>
+              <p class="text-[11px] text-indigo-600/70 mb-4 leading-relaxed">
+                Crea un código único para que otros puedan ver las estadísticas de tu equipo sin necesidad de registrarse.
+              </p>
+              <input 
+                type="text"
+                placeholder="Ej: MI-EQUIPO-2024"
+                class="w-full p-4 rounded-xl border-2 border-white bg-white focus:border-indigo-600 outline-none font-black tracking-widest uppercase text-indigo-600 shadow-sm transition-all"
+                value="${state.editViewingCode}"
+                oninput="handleEditViewingCodeChange(event); render()"
+              />
+              <p class="mt-2 text-[10px] text-slate-400 italic">
+                * Deja vacío para desactivar el acceso por código.
+              </p>
+            </div>
+            
+            <div class="flex gap-3 pt-2">
+              <button class="flex-1 px-6 py-4 rounded-2xl font-bold text-slate-500 hover:bg-slate-100 transition-all" onclick="state.editingTeamId = null; render()">
+                Cancelar
+              </button>
+              <button class="flex-1 px-6 py-4 rounded-2xl font-bold bg-indigo-600 text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2" onclick="updateTeam('${state.editingTeamId}')">
+                ${state.loading ? Icons.Loader : Icons.Check}
+                Guardar
+              </button>
+            </div>
           </div>
         </div>
       </div>
