@@ -123,6 +123,7 @@ window.state = {
   teamMembers: [],
   viewingCodeInput: '',
   editViewingCode: '',
+  newPlayerName: '',
 };
 
 // --- Auth Functions ---
@@ -172,7 +173,8 @@ window.login = async () => {
 
 window.loginAsGuest = async () => {
   state.guestMode = true;
-  state.user = { uid: 'guest', isGuest: true, displayName: 'Invitado', photoURL: 'https://picsum.photos/seed/guest/200/200' };
+  const GUEST_AVATAR = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2394a3b8'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E`;
+  state.user = { uid: 'guest', isGuest: true, displayName: 'Invitado', photoURL: GUEST_AVATAR };
   state.teams = [];
   state.currentTeamId = null;
   state.currentTeam = null;
@@ -566,6 +568,7 @@ window.toggleAddTeam = () => {
 
 window.handleNewTeamNameChange = (e) => {
   state.newTeamName = e.target.value;
+  render();
 };
 
 window.addTeam = async () => {
@@ -660,12 +663,14 @@ window.setEditingTeam = (id, name, viewingCode) => {
 
 window.handleEditViewingCodeChange = (e) => {
   state.editViewingCode = e.target.value.toUpperCase().replace(/[^A-Z0-9Ñ]/g, '').substring(0, 10);
+  render();
 };
 
 window.handleViewingCodeInput = (el) => {
   const val = el.value.toUpperCase().replace(/[^A-Z0-9Ñ]/g, '').substring(0, 10);
   state.viewingCodeInput = val;
   el.value = val;
+  render();
 };
 
 window.updateTeam = async (id) => {
@@ -856,8 +861,7 @@ window.handlePhotoUpload = async (e, playerId) => {
 
 window.addPlayer = async (e) => {
   e.preventDefault();
-  const nameInput = document.getElementById('new-player-name');
-  const name = nameInput.value.trim();
+  const name = state.newPlayerName.trim();
   if (!name) return;
   try {
     await addDoc(collection(db, `teams/${state.currentTeamId}/players`), {
@@ -866,7 +870,8 @@ window.addPlayer = async (e) => {
       teamId: state.currentTeamId,
       createdAt: serverTimestamp()
     });
-    nameInput.value = '';
+    state.newPlayerName = '';
+    render();
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `teams/${state.currentTeamId}/players`);
   }
@@ -880,6 +885,7 @@ window.setEditingPlayer = (id, name) => {
 
 window.handleEditNameChange = (e) => {
   state.editName = e.target.value;
+  render();
 };
 
 window.updatePlayer = async (id) => {
@@ -962,9 +968,10 @@ window.render = () => {
   const app = document.getElementById('app');
   
   // Save focus and selection
-  const activeId = document.activeElement?.id;
-  const selectionStart = document.activeElement?.selectionStart;
-  const selectionEnd = document.activeElement?.selectionEnd;
+  const activeElement = document.activeElement;
+  const activeId = activeElement?.id;
+  const selectionStart = activeElement?.selectionStart;
+  const selectionEnd = activeElement?.selectionEnd;
 
   if (!state.authReady) {
     app.innerHTML = `
@@ -984,6 +991,8 @@ window.render = () => {
     } else {
       app.innerHTML = renderLogin();
     }
+    // Restore focus even in login/onboarding if needed
+    restoreFocus(activeId, selectionStart, selectionEnd);
     return;
   }
 
@@ -1026,6 +1035,10 @@ window.render = () => {
   `;
 
   // Restore focus and selection
+  restoreFocus(activeId, selectionStart, selectionEnd);
+}
+
+function restoreFocus(activeId, selectionStart, selectionEnd) {
   if (activeId) {
     const el = document.getElementById(activeId);
     if (el) {
@@ -1122,7 +1135,7 @@ function renderLogin() {
               placeholder="Código de equipo..." 
               maxlength="10"
               value="${state.viewingCodeInput}"
-              oninput="handleViewingCodeInput(this); render()"
+              oninput="handleViewingCodeInput(this)"
               class="w-full p-4 rounded-2xl border-2 border-slate-100 focus:border-indigo-600 outline-none text-center font-black tracking-widest uppercase"
             />
             
@@ -1227,10 +1240,9 @@ function renderHeader() {
             <div class="flex items-center bg-white border border-indigo-300 rounded-lg px-2 py-1 shadow-sm shrink-0">
               <input 
                 id="header-new-team-input"
-                autofocus
                 placeholder="Nuevo equipo"
                 class="text-xs font-bold outline-none w-24 sm:w-32"
-                value="${state.newTeamName}"
+                value="${state.newTeamName || ''}"
                 oninput="handleNewTeamNameChange(event)"
                 onkeydown="if(event.key === 'Enter') addTeam()"
               />
@@ -1449,10 +1461,12 @@ function renderDashboard() {
                   id="first-team-name"
                   type="text" 
                   placeholder="Nombre del equipo..." 
+                  value="${state.newTeamName}"
+                  oninput="state.newTeamName = this.value; render()"
                   class="p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none w-full sm:w-64"
-                  onkeydown="if(event.key === 'Enter') { state.newTeamName = this.value; addTeam(); }"
+                  onkeydown="if(event.key === 'Enter') addTeam()"
                 />
-                <button onclick="state.newTeamName = document.getElementById('first-team-name').value; addTeam()" class="p-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-600/20">
+                <button onclick="addTeam()" class="p-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-600/20">
                   <span class="w-5 h-5 block">${Icons.Plus}</span>
                 </button>
               </div>
@@ -1675,6 +1689,8 @@ function renderDashboard() {
                     id="new-player-name"
                     type="text" 
                     placeholder="Nuevo jugador..." 
+                    value="${state.newPlayerName}"
+                    oninput="state.newPlayerName = this.value; render()"
                     class="text-xs font-bold p-2.5 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-indigo-500 outline-none w-32 sm:w-48 shadow-sm"
                   />
                   <button type="submit" class="p-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-md shadow-indigo-600/10">
@@ -1696,9 +1712,8 @@ function renderDashboard() {
                     <div class="flex items-center gap-2 flex-1" onclick="event.stopPropagation()">
                       <input 
                         id="edit-player-name-${player.id}"
-                        autofocus
                         type="text"
-                        value="${state.editName}"
+                        value="${state.editName || ''}"
                         oninput="handleEditNameChange(event)"
                         onkeydown="if(event.key === 'Enter') updatePlayer('${player.id}')"
                         class="flex-1 p-2 text-sm font-bold rounded-xl border border-indigo-300 focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -2173,7 +2188,7 @@ function renderMatchForm() {
                   min="0"
                   placeholder="Local"
                   value="${matchFormState.goalsLocal}"
-                  onchange="handleMatchFormChange('goalsLocal', this.value)"
+                  oninput="handleMatchFormChange('goalsLocal', this.value)"
                   class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-xl bg-slate-50"
                 />
                 <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 px-1">
@@ -2188,7 +2203,7 @@ function renderMatchForm() {
                   min="0"
                   placeholder="Rival"
                   value="${matchFormState.goalsVisitor}"
-                  onchange="handleMatchFormChange('goalsVisitor', this.value)"
+                  oninput="handleMatchFormChange('goalsVisitor', this.value)"
                   class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-xl bg-slate-50"
                 />
                 <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 px-1">
@@ -2231,7 +2246,7 @@ function renderMatchForm() {
                         min="0"
                         max="90"
                         value="${stat.minutes}"
-                        onchange="handlePlayerStatChange('${stat.playerId}', 'minutes', this.value)"
+                        oninput="handlePlayerStatChange('${stat.playerId}', 'minutes', this.value)"
                         class="w-16 p-1.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-center text-sm"
                       />
                     </td>
@@ -2241,7 +2256,7 @@ function renderMatchForm() {
                         type="number" 
                         min="0"
                         value="${stat.goals}"
-                        onchange="handlePlayerStatChange('${stat.playerId}', 'goals', this.value)"
+                        oninput="handlePlayerStatChange('${stat.playerId}', 'goals', this.value)"
                         class="w-16 p-1.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-center text-sm"
                       />
                     </td>

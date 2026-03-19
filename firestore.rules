@@ -42,7 +42,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
          (request.auth.token.email == "alvaro.aloper@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -61,12 +61,8 @@ service cloud.firestore {
       return isAuthenticated() && (isAdmin() || exists(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId)));
     }
 
-    function getRole(teamId) {
-      return get(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId)).data.role;
-    }
-
     function isOwner(teamId) {
-      return isAuthenticated() && (isAdmin() || getRole(teamId) == 'owner');
+      return isAuthenticated() && (isAdmin() || (exists(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId)) && get(/databases/$(database)/documents/team_members/$(request.auth.uid + "_" + teamId)).data.role == 'owner'));
     }
 
     // Validation Functions
@@ -127,7 +123,7 @@ service cloud.firestore {
     }
 
     function isTeamPublic(teamId) {
-      return get(/databases/$(database)/documents/teams/$(teamId)).data.viewingCode != null;
+      return exists(/databases/$(database)/documents/teams/$(teamId)) && get(/databases/$(database)/documents/teams/$(teamId)).data.viewingCode != null;
     }
 
     // Rules
@@ -172,10 +168,10 @@ service cloud.firestore {
 
     match /team_members/{memberId} {
       // memberId format: userId_teamId
-      allow read: if (isAuthenticated() && (request.auth.uid == resource.data.user_id || isOwner(resource.data.team_id))) || 
+      allow read: if (isAuthenticated() && (request.auth.uid == resource.data.user_id || isMember(resource.data.team_id))) || 
                     isPublicAdmin(get(/databases/$(database)/documents/teams/$(resource.data.team_id)).data.owner_id) ||
-                    get(/databases/$(database)/documents/teams/$(resource.data.team_id)).data.viewingCode != null;
-      allow create: if isAuthenticated() && (request.resource.data.role == 'owner' || exists(/databases/$(database)/documents/invite_codes/$(request.resource.data.invite_code)));
+                    isTeamPublic(resource.data.team_id);
+      allow create: if isAuthenticated() && isValidTeamMember(request.resource.data) && (request.resource.data.role == 'owner' || exists(/databases/$(database)/documents/invite_codes/$(request.resource.data.invite_code)));
       allow delete: if isAuthenticated() && isOwner(resource.data.team_id) && resource.data.role != 'owner';
     }
 
