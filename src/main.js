@@ -2162,7 +2162,7 @@ function renderMatchForm() {
               type="number" 
               required
               value="${matchFormState.matchday}"
-              oninput="handleMatchFormChange('matchday', this.value)"
+              onchange="handleMatchFormChange('matchday', this.value)"
               class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
             />
           </div>
@@ -2174,7 +2174,7 @@ function renderMatchForm() {
               required
               placeholder="Nombre del equipo rival"
               value="${matchFormState.opponent}"
-              oninput="handleMatchFormChange('opponent', this.value)"
+              onchange="handleMatchFormChange('opponent', this.value)"
               class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
             />
           </div>
@@ -2188,7 +2188,7 @@ function renderMatchForm() {
                   min="0"
                   placeholder="Local"
                   value="${matchFormState.goalsLocal}"
-                  oninput="handleMatchFormChange('goalsLocal', this.value)"
+                  onchange="handleMatchFormChange('goalsLocal', this.value)"
                   class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-xl bg-slate-50"
                 />
                 <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 px-1">
@@ -2203,7 +2203,7 @@ function renderMatchForm() {
                   min="0"
                   placeholder="Rival"
                   value="${matchFormState.goalsVisitor}"
-                  oninput="handleMatchFormChange('goalsVisitor', this.value)"
+                  onchange="handleMatchFormChange('goalsVisitor', this.value)"
                   class="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-xl bg-slate-50"
                 />
                 <span class="text-[10px] text-slate-400 font-bold uppercase block text-center mt-1 px-1">
@@ -2246,7 +2246,7 @@ function renderMatchForm() {
                         min="0"
                         max="90"
                         value="${stat.minutes}"
-                        oninput="handlePlayerStatChange('${stat.playerId}', 'minutes', this.value)"
+                        onchange="handlePlayerStatChange('${stat.playerId}', 'minutes', this.value)"
                         class="w-16 p-1.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-center text-sm"
                       />
                     </td>
@@ -2256,7 +2256,7 @@ function renderMatchForm() {
                         type="number" 
                         min="0"
                         value="${stat.goals}"
-                        oninput="handlePlayerStatChange('${stat.playerId}', 'goals', this.value)"
+                        onchange="handlePlayerStatChange('${stat.playerId}', 'goals', this.value)"
                         class="w-16 p-1.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none text-center text-sm"
                       />
                     </td>
@@ -2311,7 +2311,7 @@ function renderMatchForm() {
               type="number" 
               min="0"
               value="${matchFormState.ownGoals}"
-              oninput="handleMatchFormChange('ownGoals', this.value)"
+              onchange="handleMatchFormChange('ownGoals', this.value)"
               class="w-24 p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-center text-lg shadow-sm bg-white"
             />
           </div>
